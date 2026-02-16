@@ -9,10 +9,23 @@ const WS_PORT = 7778
 let wss: WebSocketServer | null = null
 const clients = new Set<WebSocket>()
 
+let wsRestartBackoff = 1000
+const WS_BACKOFF_MAX = 30000
+let wsRestartTimer: ReturnType<typeof setTimeout> | null = null
+
+/**
+ * Check if the WebSocket server is running
+ */
+export function isWebSocketServerRunning(): boolean {
+  return wss !== null
+}
+
 /**
  * Start the WebSocket server
  */
 export function startWebSocketServer(): void {
+  if (wss) return // Prevent duplicate start
+
   wss = new WebSocketServer({ port: WS_PORT })
 
   wss.on('connection', (ws: WebSocket) => {
@@ -60,11 +73,30 @@ export function startWebSocketServer(): void {
     })
   })
 
-  wss.on('error', (error: Error) => {
+  wss.on('error', (error: NodeJS.ErrnoException) => {
     console.error('[websocket] Server error:', error.message)
+
+    // Auto-restart on critical errors
+    if (error.code === 'EADDRINUSE' || error.code === 'EACCES') {
+      wss?.close()
+      wss = null
+      clients.clear()
+
+      console.log(`[websocket] Restarting in ${wsRestartBackoff}ms...`)
+      wsRestartTimer = setTimeout(() => {
+        wsRestartTimer = null
+        console.log('[websocket] Attempting restart...')
+        startWebSocketServer()
+      }, wsRestartBackoff)
+      wsRestartBackoff = Math.min(wsRestartBackoff * 2, WS_BACKOFF_MAX)
+    }
   })
 
-  console.log(`[websocket] WebSocket server listening on port ${WS_PORT}`)
+  wss.on('listening', () => {
+    // Reset backoff on successful start
+    wsRestartBackoff = 1000
+    console.log(`[websocket] WebSocket server listening on port ${WS_PORT}`)
+  })
 }
 
 /**
@@ -236,6 +268,10 @@ export function broadcastRawData(
  * Stop the WebSocket server
  */
 export function stopWebSocketServer(): void {
+  if (wsRestartTimer) {
+    clearTimeout(wsRestartTimer)
+    wsRestartTimer = null
+  }
   if (wss) {
     for (const client of clients) {
       client.close()

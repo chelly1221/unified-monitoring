@@ -16,7 +16,7 @@ import { evaluateSensorStatus, isColdCritical, isDryCritical, isHumidCritical } 
 import { matchesDataConditions } from '@/lib/data-match'
 import { executeCustomCode } from './custom-code-executor'
 
-const prisma = new PrismaClient()
+export const prisma = new PrismaClient()
 
 // Critical signal must occur CRITICAL_THRESHOLD consecutive times before triggering fault
 const criticalCounters = new Map<string, number>()
@@ -568,33 +568,37 @@ export async function updateMetric(config: PortConfig, data: ParsedData, port: n
     const numericValue = extractNumericValue(data)
 
     for (const system of systems) {
-      const processed = await processSystemMetric(system, data, numericValue)
+      try {
+        const processed = await processSystemMetric(system, data, numericValue)
 
-      // Update system's lastDataAt and updatedAt timestamps
-      // For equipment: always update (even unmatched messages count for offline detection)
-      // For sensor/ups: only update if data was actually processed
-      let equipmentConfig: EquipmentConfig | null = null
-      if (system.config) {
-        try {
-          const parsed = JSON.parse(system.config)
-          if (parsed.normalPatterns || parsed.criticalPatterns) {
-            equipmentConfig = parsed as EquipmentConfig
-          }
-        } catch { /* ignore */ }
-      }
+        // Update system's lastDataAt and updatedAt timestamps
+        // For equipment: always update (even unmatched messages count for offline detection)
+        // For sensor/ups: only update if data was actually processed
+        let equipmentConfig: EquipmentConfig | null = null
+        if (system.config) {
+          try {
+            const parsed = JSON.parse(system.config)
+            if (parsed.normalPatterns || parsed.criticalPatterns) {
+              equipmentConfig = parsed as EquipmentConfig
+            }
+          } catch { /* ignore */ }
+        }
 
-      if (equipmentConfig || processed) {
-        await prisma.system.update({
-          where: { id: system.id },
-          data: {
-            lastDataAt: new Date(),
-            updatedAt: new Date(),
-          },
-        })
-      }
+        if (equipmentConfig || processed) {
+          await prisma.system.update({
+            where: { id: system.id },
+            data: {
+              lastDataAt: new Date(),
+              updatedAt: new Date(),
+            },
+          })
+        }
 
-      if (processed) {
-        console.log(`[db-updater] Updated ${system.name}: ${data.value}`)
+        if (processed) {
+          console.log(`[db-updater] Updated ${system.name}: ${data.value}`)
+        }
+      } catch (error) {
+        console.error(`[db-updater] Error processing system ${system.name}:`, error)
       }
     }
   } catch (error) {
@@ -612,6 +616,7 @@ async function updateSystemStatus(
   metric: { warningThreshold: number | null; criticalThreshold: number | null },
   unit: string = ''
 ): Promise<void> {
+  try {
   let status: 'normal' | 'warning' | 'critical' = 'normal'
 
   if (metric.criticalThreshold !== null && value >= metric.criticalThreshold) {
@@ -720,6 +725,9 @@ async function updateSystemStatus(
       await syncSirenState()
     }
   }
+  } catch (error) {
+    console.error(`[db-updater] Error in updateSystemStatus for ${systemName}:`, error)
+  }
 }
 
 /**
@@ -737,6 +745,7 @@ async function updateSensorSystemStatus(
   triggerValues: Record<string, string> = {},
   allItemLabels?: string[]
 ): Promise<void> {
+  try {
   const currentSystem = await prisma.system.findUnique({
     where: { id: systemId },
     select: { status: true },
@@ -881,6 +890,9 @@ async function updateSensorSystemStatus(
     }
 
     if (created || resolvedAlarmIds.length > 0) await syncSirenState()
+  }
+  } catch (error) {
+    console.error(`[db-updater] Error in updateSensorSystemStatus for ${systemName}:`, error)
   }
 }
 

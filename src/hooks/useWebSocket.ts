@@ -17,14 +17,12 @@ interface UseWebSocketOptions {
 
 interface UseWebSocketReturn {
   connected: boolean
-  lastMessage: WebSocketMessage | null
   reconnecting: boolean
 }
 
 export function useWebSocket(options: UseWebSocketOptions = {}): UseWebSocketReturn {
   const [connected, setConnected] = useState(false)
   const [reconnecting, setReconnecting] = useState(false)
-  const [lastMessage, setLastMessage] = useState<WebSocketMessage | null>(null)
 
   const wsRef = useRef<WebSocket | null>(null)
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null)
@@ -61,7 +59,6 @@ export function useWebSocket(options: UseWebSocketOptions = {}): UseWebSocketRet
         if (!mountedRef.current) return
         try {
           const message: WebSocketMessage = JSON.parse(event.data)
-          setLastMessage(message)
           onMessageRef.current?.(message)
         } catch (error) {
           console.error('[useWebSocket] Parse error:', error)
@@ -114,5 +111,5 @@ export function useWebSocket(options: UseWebSocketOptions = {}): UseWebSocketRet
     }
   }, [connect])
 
-  return { connected, lastMessage, reconnecting }
+  return { connected, reconnecting }
 }

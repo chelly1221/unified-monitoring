@@ -1,11 +1,20 @@
 // Main entry point for the data collector worker
 
-import { startUdpListeners, stopUdpListeners } from './udp-listener'
-import { startTcpListeners, stopTcpListeners } from './tcp-listener'
+import { startUdpListeners, stopUdpListeners, getUdpListenerCount } from './udp-listener'
+import { startTcpListeners, stopTcpListeners, getTcpListenerCount } from './tcp-listener'
 import { closeDatabase, startOfflineDetection, startHistoryCleanup, syncOfflineAlarms } from './db-updater'
-import { startWebSocketServer, stopWebSocketServer } from './websocket-server'
+import { startWebSocketServer, stopWebSocketServer, isWebSocketServerRunning } from './websocket-server'
 import { resetSirens, syncSirenState } from './siren-trigger'
 import { UDP_PORTS, TCP_PORTS } from './config'
+
+// Global error handlers — log but don't crash (systemd handles real crashes)
+process.on('unhandledRejection', (reason) => {
+  console.error('[worker] Unhandled rejection:', reason)
+})
+
+process.on('uncaughtException', (error) => {
+  console.error('[worker] Uncaught exception:', error)
+})
 
 console.log('='.repeat(60))
 console.log('통합알람감시체계 - Data Collector Worker')
@@ -47,10 +56,30 @@ syncOfflineAlarms()
 console.log('\n' + '-'.repeat(60))
 console.log('Worker is running. Press Ctrl+C to stop.\n')
 
+// Health check interval (60s)
+const HEALTH_CHECK_INTERVAL = 60000
+const expectedUdp = Object.keys(UDP_PORTS).length
+const expectedTcp = Object.keys(TCP_PORTS).length
+
+const healthCheckInterval = setInterval(() => {
+  const udpCount = getUdpListenerCount()
+  const tcpCount = getTcpListenerCount()
+  const wsRunning = isWebSocketServerRunning()
+
+  console.log(`[health] UDP: ${udpCount}/${expectedUdp}, TCP: ${tcpCount}/${expectedTcp}, WebSocket: ${wsRunning ? 'OK' : 'DOWN'}`)
+
+  // Auto-restart WebSocket if down
+  if (!wsRunning) {
+    console.log('[health] WebSocket server down, restarting...')
+    startWebSocketServer()
+  }
+}, HEALTH_CHECK_INTERVAL)
+
 // Graceful shutdown handler
 async function shutdown(): Promise<void> {
   console.log('\nShutting down...')
 
+  clearInterval(healthCheckInterval)
   await resetSirens()
   stopUdpListeners()
   stopTcpListeners()

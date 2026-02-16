@@ -1,6 +1,6 @@
 'use client'
 
-import { createContext, useContext, useCallback, useState, useEffect, useRef } from 'react'
+import { createContext, useContext, useCallback, useState, useEffect, useRef, useMemo } from 'react'
 import { useWebSocket } from '@/hooks/useWebSocket'
 import type {
   PrismaSystem,
@@ -69,8 +69,8 @@ export function RealtimeProvider({
   const systemsRef = useRef<PrismaSystem[]>(initialSystems)
   systemsRef.current = systems
 
-  // Extract all metrics from systems
-  const metrics = systems.flatMap((s) => s.metrics ?? [])
+  // Extract all metrics from systems (memoized to prevent child re-renders)
+  const metrics = useMemo(() => systems.flatMap((s) => s.metrics ?? []), [systems])
 
   const updateSystem = useCallback((systemId: string, updates: Partial<PrismaSystem>) => {
     setSystems((prev) =>
@@ -217,14 +217,9 @@ export function RealtimeProvider({
         case 'alarm-resolved':
           if (data.systemId) {
             if (data.alarmIds && Array.isArray(data.alarmIds)) {
-              // Partial resolution: mark specific alarms as resolved
+              // Partial resolution: remove specific resolved alarms from state
               const ids = new Set(data.alarmIds as string[])
-              setAlarms((prev) =>
-                prev.map((a) => ids.has(a.id)
-                  ? { ...a, resolvedAt: new Date() }
-                  : a
-                )
-              )
+              setAlarms((prev) => prev.filter((a) => !ids.has(a.id)))
             } else {
               // Full resolution: remove all unresolved for system
               setAlarms((prev) =>
@@ -322,7 +317,7 @@ export function RealtimeProvider({
   // 주기적 상태 동기화 (30초) - WebSocket 메시지 유실 시 자동 복구
   useEffect(() => {
     if (!connected) return
-    const interval = setInterval(syncState, 5000)
+    const interval = setInterval(syncState, 30000)
     return () => clearInterval(interval)
   }, [connected, syncState])
 
@@ -335,24 +330,27 @@ export function RealtimeProvider({
     setAlarms(initialAlarms)
   }, [initialAlarms])
 
+  const contextValue = useMemo<RealtimeContextValue>(
+    () => ({
+      systems,
+      metrics,
+      alarms,
+      connected,
+      reconnecting,
+      lastUpdate,
+      audioMuted,
+      muteEndTime,
+      featureFlags,
+      setAudioMute,
+      updateSystem,
+      updateMetric,
+      addAlarm,
+    }),
+    [systems, metrics, alarms, connected, reconnecting, lastUpdate, audioMuted, muteEndTime, featureFlags, setAudioMute, updateSystem, updateMetric, addAlarm]
+  )
+
   return (
-    <RealtimeContext.Provider
-      value={{
-        systems,
-        metrics,
-        alarms,
-        connected,
-        reconnecting,
-        lastUpdate,
-        audioMuted,
-        muteEndTime,
-        featureFlags,
-        setAudioMute,
-        updateSystem,
-        updateMetric,
-        addAlarm,
-      }}
-    >
+    <RealtimeContext.Provider value={contextValue}>
       {children}
     </RealtimeContext.Provider>
   )

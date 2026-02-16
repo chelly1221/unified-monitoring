@@ -1,9 +1,7 @@
 // Automatic siren activation/deactivation for critical alarms
 
-import { PrismaClient } from '@prisma/client'
 import { sendTcp, sendUdp } from '@/lib/siren'
-
-const prisma = new PrismaClient()
+import { prisma } from './db-updater'
 
 let sirensActive = false
 
@@ -139,7 +137,6 @@ export async function resetSirens(): Promise<void> {
     }
 
     sirensActive = false
-    await prisma.$disconnect()
   } catch (error) {
     console.error('[siren-trigger] Error resetting sirens:', error)
   }

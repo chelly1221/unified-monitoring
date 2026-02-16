@@ -19,11 +19,11 @@ export function RealtimeDashboard() {
     (s) => s.type === '장비상태' || s.type === 'equipment'
   )
 
-  // Update clock every second
+  // Update clock every 10 seconds (sufficient for monitoring dashboard)
   useEffect(() => {
     const timer = setInterval(() => {
       setCurrentTime(new Date())
-    }, 1000)
+    }, 10000)
     return () => clearInterval(timer)
   }, [])
 

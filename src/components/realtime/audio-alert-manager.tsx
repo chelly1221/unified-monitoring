@@ -9,6 +9,7 @@ export function AudioAlertManager() {
   const { alarms, systems, metrics, audioMuted } = useRealtime()
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const currentFileRef = useRef<string | null>(null)
+  const prevCriticalKeyRef = useRef<string>('')
 
   useEffect(() => {
     // If muted, stop any playing audio immediately
@@ -19,6 +20,7 @@ export function AudioAlertManager() {
         audioRef.current = null
         currentFileRef.current = null
       }
+      prevCriticalKeyRef.current = ''
       return
     }
 
@@ -26,6 +28,14 @@ export function AudioAlertManager() {
     const activeCritical = alarms.filter(
       (a) => a.severity === 'critical' && !a.resolvedAt && !a.acknowledged
     )
+
+    // Early exit: if the set of critical alarm system IDs hasn't changed,
+    // skip expensive audio file resolution (metric updates don't affect which audio plays)
+    const criticalKey = activeCritical.map((a) => a.systemId).sort().join(',')
+    if (criticalKey === prevCriticalKeyRef.current && audioRef.current) {
+      return
+    }
+    prevCriticalKeyRef.current = criticalKey
 
     if (activeCritical.length > 0) {
       // Find the first alarm that has a valid audio file configured
