@@ -1,6 +1,7 @@
 import { prisma } from '@/lib/db'
 import { GateSettingsCard } from '@/components/settings/gate-settings-card'
 import { SirenSettingsCard } from '@/components/settings/siren-settings-card'
+import { FeatureSettingsCard } from '@/components/settings/feature-settings-card'
 
 export const dynamic = 'force-dynamic'
 
@@ -27,12 +28,17 @@ export default async function SettingsPage() {
       </div>
 
       <div className="grid grid-cols-2 gap-4">
-        {/* Left column: Gate */}
+        {/* Left column: Gate + Feature toggles */}
         <div className="space-y-4">
           <GateSettingsCard
             initialIp={settings.gateIp}
             initialPort={settings.gatePort}
             initialProtocol={settings.gateProtocol}
+          />
+          <FeatureSettingsCard
+            initialTemperatureEnabled={settings.temperatureEnabled !== 'false'}
+            initialUpsEnabled={settings.upsEnabled !== 'false'}
+            initialGateEnabled={settings.gateEnabled !== 'false'}
           />
         </div>
 

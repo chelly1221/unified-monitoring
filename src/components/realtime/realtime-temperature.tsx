@@ -12,6 +12,7 @@ import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Plus, PlusCircle } from 'lucide-react'
 import type { TrendDirection, MetricsConfig, StatusConditions } from '@/types'
+import { insertGapMarkers, forwardFill } from '@/lib/chart-utils'
 
 // Unified sensor colors — each sensor gets one color shared across card dot, temp line, and humidity line
 const SENSOR_COLORS = ['#f87171', '#4ade80', '#fbbf24', '#a78bfa', '#22d3ee', '#fb923c', '#f472b6', '#84cc16']
@@ -28,7 +29,7 @@ interface MetricHistoryItem {
 interface ChartDataPoint {
   time: string
   ts: number
-  [key: string]: string | number
+  [key: string]: string | number | null
 }
 
 function getGridClasses(count: number): string {
@@ -135,6 +136,13 @@ export function RealtimeTemperaturePanel({ sensorSystemIds }: RealtimeTemperatur
 
   // Build history data from API
   const buildChartData = useCallback((metrics: MetricHistoryItem[]) => {
+    // Build name→color map from current system order (matches card dot order)
+    const currentSystems = sensorSystemsRef.current
+    const colorMap = new Map<string, string>()
+    currentSystems.forEach((sys, i) => {
+      colorMap.set(sys.name, SENSOR_COLORS[i % SENSOR_COLORS.length])
+    })
+
     const tempMetrics = metrics.filter((m) => m.name === '온도')
     const humidMetrics = metrics.filter((m) => m.name === '습도')
 
@@ -142,9 +150,10 @@ export function RealtimeTemperaturePanel({ sensorSystemIds }: RealtimeTemperatur
     const tempTimeMap = new Map<string, ChartDataPoint>()
     const tLines: { dataKey: string; name: string; color: string }[] = []
 
-    tempMetrics.forEach((m, i) => {
+    tempMetrics.forEach((m) => {
       const key = m.system.name
-      tLines.push({ dataKey: key, name: key, color: SENSOR_COLORS[i % SENSOR_COLORS.length] })
+      const color = colorMap.get(key) ?? SENSOR_COLORS[tLines.length % SENSOR_COLORS.length]
+      tLines.push({ dataKey: key, name: key, color })
       for (const h of m.history) {
         const t = formatTime(new Date(h.recordedAt))
         const existing = tempTimeMap.get(h.recordedAt) ?? { time: t, ts: new Date(h.recordedAt).getTime() }
@@ -157,9 +166,10 @@ export function RealtimeTemperaturePanel({ sensorSystemIds }: RealtimeTemperatur
     const humidTimeMap = new Map<string, ChartDataPoint>()
     const hLines: { dataKey: string; name: string; color: string }[] = []
 
-    humidMetrics.forEach((m, i) => {
+    humidMetrics.forEach((m) => {
       const key = m.system.name
-      hLines.push({ dataKey: key, name: key, color: SENSOR_COLORS[i % SENSOR_COLORS.length] })
+      const color = colorMap.get(key) ?? SENSOR_COLORS[hLines.length % SENSOR_COLORS.length]
+      hLines.push({ dataKey: key, name: key, color })
       for (const h of m.history) {
         const t = formatTime(new Date(h.recordedAt))
         const existing = humidTimeMap.get(h.recordedAt) ?? { time: t, ts: new Date(h.recordedAt).getTime() }
@@ -252,9 +262,17 @@ export function RealtimeTemperaturePanel({ sensorSystemIds }: RealtimeTemperatur
     }
   }, [lastUpdate, historyLoaded, sensorSystems])
 
-  // Downsample only for rendering — raw state arrays are preserved intact
-  const displayTempData = useMemo(() => downsample(tempChartData, 2000), [tempChartData])
-  const displayHumidData = useMemo(() => downsample(humidityChartData, 2000), [humidityChartData])
+  // Downsample only for rendering, forward-fill sparse sensor values, then insert gap markers
+  const displayTempData = useMemo(() => {
+    const ds = downsample(tempChartData, 2000)
+    forwardFill(ds, tempLines.map(l => l.dataKey))
+    return insertGapMarkers(ds, tempLines.map(l => l.dataKey))
+  }, [tempChartData, tempLines])
+  const displayHumidData = useMemo(() => {
+    const ds = downsample(humidityChartData, 2000)
+    forwardFill(ds, humidityLines.map(l => l.dataKey))
+    return insertGapMarkers(ds, humidityLines.map(l => l.dataKey))
+  }, [humidityChartData, humidityLines])
 
   // Temperature Y-axis: default 16~26, expand if data exceeds range
   const tempYDomain = useMemo((): [number, number] => {
@@ -552,6 +570,7 @@ export function RealtimeTemperaturePanel({ sensorSystemIds }: RealtimeTemperatur
                 yDomain={tempYDomain}
                 xDataKey="ts"
                 xAxisType="number"
+                connectNulls={false}
                 xAxisTickFormatter={(ts) => {
                   const d = new Date(ts)
                   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
@@ -583,6 +602,7 @@ export function RealtimeTemperaturePanel({ sensorSystemIds }: RealtimeTemperatur
                 yDomain={[0, 100]}
                 xDataKey="ts"
                 xAxisType="number"
+                connectNulls={false}
                 xAxisTickFormatter={(ts) => {
                   const d = new Date(ts)
                   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`

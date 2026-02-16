@@ -679,3 +679,106 @@
     transform: translateX(30px);
   }
 }
+
+/* ===== Compact Screen (RPi 7-inch 800x480) ===== */
+@media (max-height: 520px) {
+  /* Override keyframes: replace 100vh with 480px */
+  @keyframes flame-rise {
+    0% { transform: translateY(0) scale(1); opacity: 0.8; }
+    50% { opacity: 1; }
+    100% { transform: translateY(-480px) scale(0.3); opacity: 0; }
+  }
+  @keyframes ember-float {
+    0% { transform: translateY(0) translateX(0) scale(1); opacity: 0.9; }
+    25% { transform: translateY(-120px) translateX(15px) scale(0.8); }
+    50% { transform: translateY(-240px) translateX(-10px) scale(0.6); opacity: 0.7; }
+    75% { transform: translateY(-360px) translateX(20px) scale(0.4); }
+    100% { transform: translateY(-480px) translateX(-5px) scale(0.2); opacity: 0; }
+  }
+  @keyframes snowfall {
+    0% { transform: translateY(-20px) translateX(0) rotate(0deg); opacity: 0; }
+    10% { opacity: 1; }
+    90% { opacity: 0.8; }
+    100% { transform: translateY(480px) translateX(var(--snow-drift, 30px)) rotate(360deg); opacity: 0; }
+  }
+  @keyframes rainfall {
+    0% { transform: translateY(-20px) translateX(var(--rain-drift, -5px)); opacity: 0; }
+    10% { opacity: 0.7; }
+    90% { opacity: 0.5; }
+    100% { transform: translateY(480px) translateX(var(--rain-drift, -5px)); opacity: 0; }
+  }
+
+  /* Reduce glow intensity (2-layer instead of 4-layer) */
+  @keyframes danger-glow {
+    0%, 100% {
+      box-shadow:
+        0 0 20px rgba(239, 68, 68, 0.5),
+        inset 0 0 15px rgba(255, 255, 255, 0.08);
+    }
+    50% {
+      box-shadow:
+        0 0 35px rgba(239, 68, 68, 0.7),
+        inset 0 0 25px rgba(255, 255, 255, 0.12);
+    }
+  }
+  @keyframes warning-glow {
+    0%, 100% {
+      box-shadow:
+        0 0 20px rgba(234, 179, 8, 0.5),
+        inset 0 0 15px rgba(255, 255, 255, 0.08);
+    }
+    50% {
+      box-shadow:
+        0 0 35px rgba(234, 179, 8, 0.7),
+        inset 0 0 25px rgba(255, 255, 255, 0.12);
+    }
+  }
+
+  /* Reduce fire-glow intensity */
+  @keyframes fire-glow {
+    0%, 100% {
+      box-shadow: inset 0 -40px 60px -20px rgba(239, 68, 68, 0.3),
+                  inset 0 -20px 40px -10px rgba(251, 146, 60, 0.2);
+    }
+    50% {
+      box-shadow: inset 0 -50px 75px -20px rgba(239, 68, 68, 0.45),
+                  inset 0 -30px 50px -10px rgba(251, 146, 60, 0.35);
+    }
+  }
+
+  /* Reduce frost-glow intensity */
+  @keyframes frost-glow {
+    0%, 100% {
+      box-shadow: inset 0 0 40px 10px rgba(147, 197, 253, 0.1),
+                  inset 0 0 20px 5px rgba(219, 234, 254, 0.07);
+    }
+    50% {
+      box-shadow: inset 0 0 60px 15px rgba(147, 197, 253, 0.18),
+                  inset 0 0 30px 8px rgba(219, 234, 254, 0.12);
+    }
+  }
+
+  /* Reduce soft-pulse intensity */
+  @keyframes soft-pulse {
+    0%, 100% {
+      box-shadow: 0 0 15px rgba(34,197,94,0.3), 0 0 30px rgba(34,197,94,0.15);
+    }
+    50% {
+      box-shadow: 0 0 25px rgba(34,197,94,0.45), 0 0 50px rgba(34,197,94,0.2);
+    }
+  }
+
+  /* Scale down alert-ring-expand max scale */
+  @keyframes alert-ring-expand {
+    0% {
+      transform: translate(-50%, -50%) scale(0.3);
+      opacity: 1;
+      border-width: 3px;
+    }
+    100% {
+      transform: translate(-50%, -50%) scale(1.8);
+      opacity: 0;
+      border-width: 1px;
+    }
+  }
+}

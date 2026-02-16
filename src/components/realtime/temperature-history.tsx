@@ -6,13 +6,14 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { LineChart } from '@/components/charts/line-chart'
 import { ArrowLeft, Thermometer, Droplets } from 'lucide-react'
+import { insertGapMarkers, forwardFill } from '@/lib/chart-utils'
 
 const SENSOR_COLORS = ['#f87171', '#4ade80', '#fbbf24', '#a78bfa', '#22d3ee', '#fb923c', '#f472b6', '#84cc16']
 
 interface ChartDataPoint {
   time: string
   ts: number
-  [key: string]: string | number
+  [key: string]: string | number | null
 }
 
 interface MetricHistoryItem {
@@ -100,7 +101,10 @@ export function TemperatureHistory() {
       })
 
       const sorted = Array.from(timeMap.values()).sort((a, b) => a.ts - b.ts)
-      setChartData(downsample(sorted, 2000))
+      const ds = downsample(sorted, 2000)
+      const keys = lineConfigs.map(l => l.dataKey)
+      forwardFill(ds, keys)
+      setChartData(insertGapMarkers(ds, keys))
       setLines(lineConfigs)
     } catch (e) {
       console.error('[temperature-history] fetch error:', e)
@@ -231,10 +235,11 @@ export function TemperatureHistory() {
               data={chartData}
               lines={lines}
               height="100%"
-              showLegend={true}
+              showLegend={false}
               yDomain={yDomain}
               xDataKey="ts"
               xAxisType="number"
+              connectNulls={false}
               xAxisTickFormatter={xAxisTickFormatter}
             />
           ) : (

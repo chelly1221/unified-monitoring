@@ -10,9 +10,10 @@ import type { AudioConfig, AudioAlertType } from "@/types"
 interface SystemAudioConfigProps {
   config: AudioConfig
   onChange: (config: AudioConfig) => void
+  compact?: boolean
 }
 
-export function SystemAudioConfig({ config, onChange }: SystemAudioConfigProps) {
+export function SystemAudioConfig({ config, onChange, compact = false }: SystemAudioConfigProps) {
   const [uploading, setUploading] = React.useState(false)
   const [playing, setPlaying] = React.useState(false)
   const audioRef = React.useRef<HTMLAudioElement | null>(null)
@@ -68,6 +69,59 @@ export function SystemAudioConfig({ config, onChange }: SystemAudioConfigProps) 
     audioRef.current = audio
     setPlaying(true)
     audio.play()
+  }
+
+  if (compact) {
+    return (
+      <div className="flex items-center gap-2 rounded border px-2 py-1">
+        <Volume2 className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+        <span className="text-xs text-muted-foreground shrink-0">경고 음성</span>
+        <RadioGroup
+          value={config.type}
+          onValueChange={(v) => handleTypeChange(v as AudioAlertType)}
+          className="flex gap-3"
+        >
+          <div className="flex items-center space-x-1">
+            <RadioGroupItem value="none" id="audio-none-c" className="h-3.5 w-3.5" />
+            <Label htmlFor="audio-none-c" className="cursor-pointer font-normal text-xs">없음</Label>
+          </div>
+          <div className="flex items-center space-x-1">
+            <RadioGroupItem value="file" id="audio-file-c" className="h-3.5 w-3.5" />
+            <Label htmlFor="audio-file-c" className="cursor-pointer font-normal text-xs">파일</Label>
+          </div>
+        </RadioGroup>
+        {config.type === "file" && (
+          <>
+            <Label
+              htmlFor="audio-upload-c"
+              className="flex cursor-pointer items-center gap-1 rounded border px-1.5 py-0.5 text-xs hover:bg-accent shrink-0"
+            >
+              <Upload className="h-3 w-3" />
+              {uploading ? "..." : config.fileName || "파일 선택"}
+            </Label>
+            <input
+              id="audio-upload-c"
+              type="file"
+              accept=".mp3,.wav"
+              onChange={handleFileUpload}
+              className="hidden"
+              disabled={uploading}
+            />
+            {config.fileName && (
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                className="h-6 w-6"
+                onClick={handlePreviewFile}
+              >
+                {playing ? <Square className="h-3 w-3" /> : <Play className="h-3 w-3" />}
+              </Button>
+            )}
+          </>
+        )}
+      </div>
+    )
   }
 
   return (

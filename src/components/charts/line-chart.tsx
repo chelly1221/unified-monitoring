@@ -12,7 +12,7 @@ import {
 } from 'recharts'
 
 interface DataPoint {
-  [key: string]: string | number | undefined
+  [key: string]: string | number | null | undefined
 }
 
 interface LineConfig {
@@ -31,6 +31,7 @@ interface LineChartProps {
   xDataKey?: string
   xAxisType?: 'category' | 'number'
   xAxisTickFormatter?: (value: number) => string
+  connectNulls?: boolean
 }
 
 function findNearest(
@@ -100,16 +101,17 @@ function makeNearestTooltip(
         backgroundColor: '#1c1c1c',
         border: '1px solid #333333',
         borderRadius: '8px',
-        padding: '8px 12px',
+        padding: '4px 8px',
+        fontSize: '12px',
       }}>
-        <p style={{ color: '#fafafa', margin: '0 0 4px 0' }}>
+        <p style={{ color: '#fafafa', margin: '0 0 2px 0' }}>
           {labelFormatter ? labelFormatter(currentTs) : currentTs}
         </p>
         {lines.map(line => {
           const directValue = currentPoint[line.dataKey]
           if (directValue != null) {
             return (
-              <p key={line.dataKey} style={{ color: line.color, margin: '2px 0' }}>
+              <p key={line.dataKey} style={{ color: line.color, margin: '1px 0' }}>
                 {line.name}: {directValue}
               </p>
             )
@@ -118,7 +120,7 @@ function makeNearestTooltip(
           const nearest = findNearest(data, idx, line.dataKey, xDataKey, currentTs, maxGapMs)
           if (nearest == null) return null
           return (
-            <p key={line.dataKey} style={{ color: line.color, margin: '2px 0' }}>
+            <p key={line.dataKey} style={{ color: line.color, margin: '1px 0' }}>
               {line.name}: {nearest}
             </p>
           )
@@ -138,6 +140,7 @@ export function LineChart({
   xDataKey = 'time',
   xAxisType = 'category',
   xAxisTickFormatter,
+  connectNulls = true,
 }: LineChartProps) {
   return (
     <ResponsiveContainer width="100%" height={height as number | `${number}%`}>
@@ -172,9 +175,11 @@ export function LineChart({
             backgroundColor: '#1c1c1c',
             border: '1px solid #333333',
             borderRadius: '8px',
+            fontSize: '12px',
+            padding: '4px 8px',
           } : undefined}
-          labelStyle={xAxisType !== 'number' ? { color: '#fafafa' } : undefined}
-          itemStyle={xAxisType !== 'number' ? { color: '#a1a1aa' } : undefined}
+          labelStyle={xAxisType !== 'number' ? { color: '#fafafa', fontSize: '11px' } : undefined}
+          itemStyle={xAxisType !== 'number' ? { color: '#a1a1aa', fontSize: '11px' } : undefined}
         />
         {showLegend && (
           <Legend
@@ -195,7 +200,7 @@ export function LineChart({
             dot={false}
             activeDot={{ r: 4, fill: line.color }}
             isAnimationActive={false}
-            connectNulls
+            connectNulls={connectNulls}
           />
         ))}
       </RechartsLineChart>

@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import vm from 'vm'
 import { prisma } from '@/lib/db'
 import { notifySystemDeleted, notifySystemStatusChanged, notifyAlarmResolution, notifySirenSync } from '@/lib/ws-notify'
 import type { MetricsConfig, SystemStatus, DisplayItem } from '@/types'
@@ -31,7 +32,7 @@ async function recalculateSystemStatus(systemId: string, systemName: string): Pr
   if (system.config) {
     try {
       const parsed = JSON.parse(system.config)
-      if (parsed.delimiter && parsed.displayItems) {
+      if ((parsed.delimiter || parsed.customCode) && parsed.displayItems) {
         metricsConfig = parsed as MetricsConfig
       }
     } catch {
@@ -68,15 +69,13 @@ async function recalculateSystemStatus(systemId: string, systemName: string): Pr
 
       if (critical !== null && value >= critical) {
         metricStatus = 'critical'
-      } else if (warning !== null && value >= warning) {
-        metricStatus = 'warning'
+      } else if (warning !== null && value <= warning) {
+        metricStatus = 'critical'
       }
 
       if (metricStatus === 'critical') {
         worstStatus = 'critical'
         break
-      } else if (metricStatus === 'warning') {
-        worstStatus = 'warning'
       }
     }
   }
@@ -180,6 +179,20 @@ export async function PUT(request: Request, { params }: RouteParams) {
         { error: 'System not found' },
         { status: 404 }
       )
+    }
+
+    // Validate customCode syntax if present
+    if (config?.customCode?.trim()) {
+      try {
+        const wrapped = `(function(raw) { ${config.customCode} })(rawInput)`
+        new vm.Script(wrapped)
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        return NextResponse.json(
+          { error: `커스텀 코드 구문 오류: ${msg}` },
+          { status: 400 }
+        )
+      }
     }
 
     const system = await prisma.system.update({

@@ -13,6 +13,27 @@ export function evaluateCondition(value: number, condition: ThresholdCondition):
       return value >= condition.value1
     case 'lte':
       return value <= condition.value1
+    case 'eq':
+      if (condition.stringValue !== undefined) return String(value) === condition.stringValue
+      return value === condition.value1
+    case 'neq':
+      if (condition.stringValue !== undefined) return String(value) !== condition.stringValue
+      return value !== condition.value1
+    default:
+      return false
+  }
+}
+
+/**
+ * Evaluate a condition against a raw string value (for status-type metrics)
+ */
+export function evaluateStringCondition(rawValue: string, condition: ThresholdCondition): boolean {
+  const compareValue = condition.stringValue ?? String(condition.value1)
+  switch (condition.operator) {
+    case 'eq':
+      return rawValue === compareValue
+    case 'neq':
+      return rawValue !== compareValue
     default:
       return false
   }

@@ -12,6 +12,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Plus, Trash2, X, Volume2, Upload, Play, Square, Filter } from "lucide-react"
+import { Checkbox } from "@/components/ui/checkbox"
 import type {
   MetricsConfig,
   DisplayItem,
@@ -21,6 +22,8 @@ import type {
   AudioConfig,
   DataMatchCondition,
   DataMatchOperator,
+  ConditionOperator,
+  MetricItemType,
 } from "@/types"
 
 interface SystemMetricsConfigProps {
@@ -32,6 +35,7 @@ interface SystemMetricsConfigProps {
   dataPreviewSlot?: React.ReactNode
   disabled?: boolean
   sensorItemName?: string // "온도" or "습도" - render only this item
+  testResultKeys?: string[] | null
 }
 
 const SENSOR_TYPES = [
@@ -55,8 +59,138 @@ const DATA_MATCH_OPERATORS: { value: DataMatchOperator; label: string }[] = [
   { value: "regex", label: "정규식" },
 ]
 
+// UPS metric type presets
+type ConditionPattern = 'both' | 'upper' | 'lower' | 'status'
+
+interface TypePreset {
+  label: string
+  unit: string
+  conditionPattern: ConditionPattern
+}
+
+const UPS_TYPE_PRESETS: Record<Exclude<MetricItemType, 'custom'>, TypePreset> = {
+  inputVoltage:     { label: '입력전압',   unit: 'V',  conditionPattern: 'both' },
+  outputVoltage:    { label: '출력전압',   unit: 'V',  conditionPattern: 'both' },
+  batteryVoltage:   { label: '배터리전압', unit: 'V',  conditionPattern: 'both' },
+  inputCurrent:     { label: '입력전류',   unit: 'A',  conditionPattern: 'upper' },
+  outputCurrent:    { label: '출력전류',   unit: 'A',  conditionPattern: 'upper' },
+  batteryCurrent:   { label: '배터리전류', unit: 'A',  conditionPattern: 'upper' },
+  inputFrequency:   { label: '입력주파수', unit: 'Hz', conditionPattern: 'both' },
+  outputFrequency:  { label: '출력주파수', unit: 'Hz', conditionPattern: 'both' },
+  load:             { label: '부하',       unit: '%',  conditionPattern: 'upper' },
+  temperature:      { label: '온도',       unit: '°C', conditionPattern: 'upper' },
+  status:           { label: '상태',       unit: '',   conditionPattern: 'status' },
+  batteryRemaining: { label: '배터리잔량', unit: '%',  conditionPattern: 'lower' },
+}
+
+const UPS_TYPE_OPTIONS: { value: MetricItemType; label: string }[] = [
+  { value: 'inputVoltage', label: '입력전압' },
+  { value: 'outputVoltage', label: '출력전압' },
+  { value: 'batteryVoltage', label: '배터리전압' },
+  { value: 'inputCurrent', label: '입력전류' },
+  { value: 'outputCurrent', label: '출력전류' },
+  { value: 'batteryCurrent', label: '배터리전류' },
+  { value: 'inputFrequency', label: '입력주파수' },
+  { value: 'outputFrequency', label: '출력주파수' },
+  { value: 'load', label: '부하' },
+  { value: 'temperature', label: '온도' },
+  { value: 'status', label: '상태' },
+  { value: 'batteryRemaining', label: '배터리잔량' },
+  { value: 'custom', label: '사용자정의' },
+]
+
+function resolveItemType(item: DisplayItem): MetricItemType {
+  return item.itemType ?? 'custom'
+}
+
+function getTypePreset(type: MetricItemType): TypePreset | null {
+  if (type === 'custom') return null
+  return UPS_TYPE_PRESETS[type] ?? null
+}
+
+function getLowerThreshold(item: DisplayItem): number | null {
+  if (item.conditions) {
+    const lte = item.conditions.critical.find(c => c.operator === 'lte')
+    return lte ? lte.value1 : null
+  }
+  return item.warning ?? null
+}
+
+function getUpperThreshold(item: DisplayItem): number | null {
+  if (item.conditions) {
+    const gte = item.conditions.critical.find(c => c.operator === 'gte')
+    return gte ? gte.value1 : null
+  }
+  return item.critical ?? null
+}
+
+function buildConditionsFromThresholds(lower: number | null, upper: number | null): StatusConditions {
+  const critical: ThresholdCondition[] = []
+  if (lower !== null) {
+    critical.push({ operator: 'lte', value1: lower, value2: null })
+  }
+  if (upper !== null) {
+    critical.push({ operator: 'gte', value1: upper, value2: null })
+  }
+  return { normal: [], critical, coldCritical: [], dryCritical: [], humidCritical: [] }
+}
+
+function getStatusCondition(item: DisplayItem): { operator: 'eq' | 'neq'; textValue: string } | null {
+  if (item.conditions) {
+    const cond = item.conditions.critical.find(c => c.operator === 'eq' || c.operator === 'neq')
+    if (cond) return { operator: cond.operator as 'eq' | 'neq', textValue: cond.stringValue ?? String(cond.value1) }
+  }
+  return null
+}
+
+function buildStatusCondition(operator: 'eq' | 'neq', textValue: string): StatusConditions {
+  const numVal = parseFloat(textValue)
+  return {
+    normal: [],
+    critical: [{ operator, value1: isNaN(numVal) ? 0 : numVal, value2: null, stringValue: textValue }],
+    coldCritical: [], dryCritical: [], humidCritical: [],
+  }
+}
+
+const OPERATOR_SYMBOL: Record<string, string> = {
+  lte: '≤', gte: '≥', eq: '=', neq: '≠',
+}
+
+function formatConditionsReadonly(item: DisplayItem): string {
+  const conds = getItemConditions(item)
+  if (conds.length > 0) {
+    return conds.map(c => {
+      const sym = OPERATOR_SYMBOL[c.operator] ?? c.operator
+      const val = c.stringValue !== undefined ? c.stringValue : c.value1
+      return `${sym}${val}`
+    }).join(' ')
+  }
+  const lower = getLowerThreshold(item)
+  const upper = getUpperThreshold(item)
+  const parts: string[] = []
+  if (lower !== null) parts.push(`≤${lower}`)
+  if (upper !== null) parts.push(`≥${upper}`)
+  return parts.length > 0 ? parts.join(' ') : '-'
+}
+
 function newCondition(): ThresholdCondition {
   return { operator: "gte", value1: 0, value2: null }
+}
+
+// Get conditions from item, auto-converting legacy warning/critical if needed
+function getItemConditions(item: DisplayItem): ThresholdCondition[] {
+  if (item.conditions) {
+    return item.conditions.critical || []
+  }
+  // Auto-convert legacy warning (하한치, ≤) and critical (상한치, ≥)
+  const converted: ThresholdCondition[] = []
+  if (item.warning !== null && item.warning !== undefined) {
+    converted.push({ operator: "lte", value1: item.warning, value2: null })
+  }
+  if (item.critical !== null && item.critical !== undefined) {
+    converted.push({ operator: "gte", value1: item.critical, value2: null })
+  }
+  return converted
 }
 
 // Number input that allows clearing the field before typing a new value
@@ -432,8 +566,10 @@ export function SystemMetricsConfig({
   dataPreviewSlot,
   disabled = false,
   sensorItemName,
+  testResultKeys,
 }: SystemMetricsConfigProps) {
   const isSensor = systemType === "sensor"
+  const [expandedAudioRow, setExpandedAudioRow] = React.useState<number | null>(null)
 
   const addItem = () => {
     const nextIndex = config.displayItems.length
@@ -462,9 +598,13 @@ export function SystemMetricsConfig({
           {
             name: "",
             index: nextIndex,
-            unit: "",
+            unit: "V",
             warning: null,
             critical: null,
+            itemType: 'inputVoltage',
+            conditions: buildConditionsFromThresholds(null, null),
+            chartGroup: null,
+            alarmEnabled: true,
           },
         ],
       })
@@ -502,6 +642,33 @@ export function SystemMetricsConfig({
     if (sensorName === "온도" && item.conditions) {
       updates.conditions = { ...item.conditions, dryCritical: [], humidCritical: [] }
     }
+    updateItem(index, updates)
+  }
+
+  const handleUpsTypeChange = (index: number, newType: MetricItemType) => {
+    const item = config.displayItems[index]
+    const preset = getTypePreset(newType)
+    const updates: Partial<DisplayItem> = { itemType: newType }
+
+    if (preset) {
+      updates.unit = preset.unit
+      // Restructure conditions based on pattern
+      const lower = getLowerThreshold(item)
+      const upper = getUpperThreshold(item)
+      if (preset.conditionPattern === 'status') {
+        const sc = getStatusCondition(item)
+        updates.conditions = buildStatusCondition(sc?.operator ?? 'neq', sc?.textValue ?? '')
+      } else if (preset.conditionPattern === 'both') {
+        updates.conditions = buildConditionsFromThresholds(lower, upper)
+      } else if (preset.conditionPattern === 'upper') {
+        updates.conditions = buildConditionsFromThresholds(null, upper)
+      } else {
+        updates.conditions = buildConditionsFromThresholds(lower, null)
+      }
+    }
+    // custom: keep conditions and unit as-is
+    updates.warning = null
+    updates.critical = null
     updateItem(index, updates)
   }
 
@@ -883,122 +1050,386 @@ export function SystemMetricsConfig({
     )
   }
 
-  // Default UPS/other mode (unchanged table UI)
+  // Default UPS/other mode (dense table UI)
+  const hasCustomCode = !!config.customCode?.trim()
+
+
   return (
-    <div className="space-y-4">
-      <div className="font-medium text-sm">{typeLabel} 설정</div>
+    <div className="space-y-1">
+      {hasCustomCode && (
+        <div className="rounded bg-blue-950/50 border border-blue-800 px-2 py-1 text-[10px] text-blue-300">
+          커스텀 코드 활성 - 구분자/순서 설정이 무시됩니다
+        </div>
+      )}
+      {config.displayItems.length > 0 && (
+        <div className="rounded border">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="border-b bg-muted/50">
+                <th className="px-1 py-1 text-left font-semibold text-xs">이름</th>
+                {!hasCustomCode && <th className="px-1 py-1 text-left font-semibold text-xs w-12">순서</th>}
+                <th className="px-1 py-1 text-left font-semibold text-xs w-24">타입</th>
+                <th className="px-1 py-1 text-left font-semibold text-xs">알람 조건</th>
+                <th className="px-1 py-1 text-center font-semibold text-xs w-10">차트</th>
+                <th className="px-1 py-1 text-center font-semibold text-xs w-10">알람</th>
+                <th className="px-1 py-1 text-center font-semibold text-xs w-10">음성</th>
+                <th className="px-1 py-1 w-6"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {config.displayItems.map((item, index) => {
+                const itemType = resolveItemType(item)
+                const preset = getTypePreset(itemType)
+                const pattern = preset?.conditionPattern ?? null
 
-      <div className="space-y-3">
-        <Label className="text-sm text-muted-foreground">표시 항목</Label>
-
-        {config.displayItems.length > 0 && (
-          <div className="rounded-md border">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b bg-muted/50">
-                  <th className="px-3 py-2 text-left font-medium">이름</th>
-                  <th className="px-3 py-2 text-left font-medium w-16">순서</th>
-                  <th className="px-3 py-2 text-left font-medium w-16">단위</th>
-                  <th className="px-3 py-2 text-left font-medium w-20">주의</th>
-                  <th className="px-3 py-2 text-left font-medium w-20">경고</th>
-                  <th className="px-3 py-2 w-10"></th>
-                </tr>
-              </thead>
-              <tbody>
-                {config.displayItems.map((item, index) => (
-                  <tr key={index} className="border-b last:border-0">
-                    <td className="px-2 py-1">
+                return (
+                <React.Fragment key={index}>
+                <tr className="border-b last:border-0">
+                  <td className="px-1 py-0.5">
+                    <div className="flex items-center gap-1">
+                      {hasCustomCode && testResultKeys && (
+                        <span
+                          className={`shrink-0 h-1.5 w-1.5 rounded-full ${
+                            testResultKeys.includes(item.name) ? "bg-green-500" : "bg-red-500"
+                          }`}
+                          title={testResultKeys.includes(item.name) ? "테스트 결과에 존재" : "테스트 결과에 없음"}
+                        />
+                      )}
                       <Input
                         value={item.name}
                         onChange={(e) =>
                           updateItem(index, { name: e.target.value })
                         }
                         placeholder="항목명"
-                        className="h-8"
+                        className="h-6 text-xs"
+                        disabled={disabled}
                       />
-                    </td>
-                    <td className="px-2 py-1">
-                      <Input
-                        type="number"
-                        value={item.index}
-                        onChange={(e) =>
-                          updateItem(index, {
-                            index: parseInt(e.target.value, 10) || 0,
-                          })
-                        }
-                        min={0}
-                        className="h-8 w-14"
-                      />
-                    </td>
-                    <td className="px-2 py-1">
-                      <Input
-                        value={item.unit}
-                        onChange={(e) =>
-                          updateItem(index, { unit: e.target.value })
-                        }
-                        placeholder="V"
-                        className="h-8 w-14"
-                      />
-                    </td>
-                    <td className="px-2 py-1">
-                      <Input
-                        type="number"
-                        value={item.warning ?? ""}
-                        onChange={(e) =>
-                          updateItem(index, {
-                            warning: e.target.value
-                              ? parseFloat(e.target.value)
-                              : null,
-                          })
-                        }
-                        placeholder="-"
-                        className="h-8 w-16"
-                      />
-                    </td>
-                    <td className="px-2 py-1">
-                      <Input
-                        type="number"
-                        value={item.critical ?? ""}
-                        onChange={(e) =>
-                          updateItem(index, {
-                            critical: e.target.value
-                              ? parseFloat(e.target.value)
-                              : null,
-                          })
-                        }
-                        placeholder="-"
-                        className="h-8 w-16"
-                      />
-                    </td>
-                    <td className="px-2 py-1">
-                      <Button
-                        type="button"
-                        size="icon"
-                        variant="ghost"
-                        className="h-8 w-8 text-muted-foreground hover:text-destructive"
-                        onClick={() => removeItem(index)}
+                    </div>
+                  </td>
+                  {!hasCustomCode && (
+                  <td className="px-1 py-0.5">
+                    <Input
+                      type="number"
+                      value={item.index}
+                      onChange={(e) =>
+                        updateItem(index, {
+                          index: parseInt(e.target.value, 10) || 0,
+                        })
+                      }
+                      min={0}
+                      className="h-6 w-12 text-xs"
+                      disabled={disabled}
+                    />
+                  </td>
+                  )}
+                  {/* Type dropdown */}
+                  <td className="px-1 py-0.5">
+                    {disabled ? (
+                      <span className="text-xs text-muted-foreground">
+                        {UPS_TYPE_OPTIONS.find(o => o.value === itemType)?.label ?? '사용자정의'}
+                        {preset && <span className="ml-1 text-[10px] opacity-60">({preset.unit})</span>}
+                      </span>
+                    ) : (
+                      <Select
+                        value={itemType}
+                        onValueChange={(v) => handleUpsTypeChange(index, v as MetricItemType)}
                       >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
+                        <SelectTrigger className="h-6 w-24 text-[11px] px-1">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {UPS_TYPE_OPTIONS.map((opt) => {
+                            const p = opt.value !== 'custom' ? UPS_TYPE_PRESETS[opt.value as Exclude<MetricItemType, 'custom'>] : null
+                            return (
+                            <SelectItem key={opt.value} value={opt.value}>
+                              {opt.label}
+                              {p?.unit && (
+                                <span className="ml-1 text-muted-foreground">
+                                  ({p.unit})
+                                </span>
+                              )}
+                            </SelectItem>
+                            )
+                          })}
+                        </SelectContent>
+                      </Select>
+                    )}
+                  </td>
+                  {/* Alarm conditions - adaptive based on type */}
+                  <td className="px-1 py-0.5">
+                    {disabled ? (
+                      <span className="text-xs text-muted-foreground">
+                        {formatConditionsReadonly(item)}
+                      </span>
+                    ) : pattern === 'both' ? (
+                      /* Dual input: ≤ lower + ≥ upper */
+                      <div className="flex items-center gap-1">
+                        <span className="text-sm font-bold text-muted-foreground">≤</span>
+                        <NumericInput
+                          value={getLowerThreshold(item) ?? 0}
+                          onValueChange={(v) => {
+                            updateItem(index, {
+                              warning: null, critical: null,
+                              conditions: buildConditionsFromThresholds(v, getUpperThreshold(item)),
+                            })
+                          }}
+                          className="h-6 w-16 text-xs"
+                        />
+                        <span className="text-sm font-bold text-muted-foreground">≥</span>
+                        <NumericInput
+                          value={getUpperThreshold(item) ?? 0}
+                          onValueChange={(v) => {
+                            updateItem(index, {
+                              warning: null, critical: null,
+                              conditions: buildConditionsFromThresholds(getLowerThreshold(item), v),
+                            })
+                          }}
+                          className="h-6 w-16 text-xs"
+                        />
+                      </div>
+                    ) : pattern === 'upper' ? (
+                      /* Upper only: ≥ */
+                      <div className="flex items-center gap-1">
+                        <span className="text-sm font-bold text-muted-foreground">≥</span>
+                        <NumericInput
+                          value={getUpperThreshold(item) ?? 0}
+                          onValueChange={(v) => {
+                            updateItem(index, {
+                              warning: null, critical: null,
+                              conditions: buildConditionsFromThresholds(null, v),
+                            })
+                          }}
+                          className="h-6 w-16 text-xs"
+                        />
+                      </div>
+                    ) : pattern === 'lower' ? (
+                      /* Lower only: ≤ */
+                      <div className="flex items-center gap-1">
+                        <span className="text-sm font-bold text-muted-foreground">≤</span>
+                        <NumericInput
+                          value={getLowerThreshold(item) ?? 0}
+                          onValueChange={(v) => {
+                            updateItem(index, {
+                              warning: null, critical: null,
+                              conditions: buildConditionsFromThresholds(v, null),
+                            })
+                          }}
+                          className="h-6 w-16 text-xs"
+                        />
+                      </div>
+                    ) : pattern === 'status' ? (
+                      /* Status: = or ≠ dropdown + text value */
+                      <div className="flex items-center gap-1">
+                        <Select
+                          value={getStatusCondition(item)?.operator ?? 'neq'}
+                          onValueChange={(v) => {
+                            const sc = getStatusCondition(item)
+                            updateItem(index, {
+                              warning: null, critical: null,
+                              conditions: buildStatusCondition(v as 'eq' | 'neq', sc?.textValue ?? ''),
+                            })
+                          }}
+                        >
+                          <SelectTrigger className="h-6 w-14 text-sm font-bold px-1">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="eq"><span className="font-bold">=</span></SelectItem>
+                            <SelectItem value="neq"><span className="font-bold">≠</span></SelectItem>
+                          </SelectContent>
+                        </Select>
+                        <Input
+                          value={getStatusCondition(item)?.textValue ?? ''}
+                          onChange={(e) => {
+                            const sc = getStatusCondition(item)
+                            updateItem(index, {
+                              warning: null, critical: null,
+                              conditions: buildStatusCondition(sc?.operator ?? 'neq', e.target.value),
+                            })
+                          }}
+                          placeholder="값"
+                          className="h-6 w-20 text-xs"
+                        />
+                      </div>
+                    ) : (
+                      /* Custom: flexible multi-condition editor */
+                      <div className="space-y-0.5">
+                        {getItemConditions(item).map((cond, ci) => (
+                          <div key={ci} className="flex items-center gap-0.5">
+                            <Select
+                              value={cond.operator}
+                              onValueChange={(v) => {
+                                const conds = getItemConditions(item)
+                                const newConds = conds.map((c, i) =>
+                                  i === ci
+                                    ? { ...c, operator: v as ConditionOperator }
+                                    : c
+                                )
+                                updateItem(index, {
+                                  warning: null, critical: null,
+                                  conditions: {
+                                    normal: [], critical: newConds,
+                                    coldCritical: [], dryCritical: [], humidCritical: [],
+                                  },
+                                })
+                              }}
+                            >
+                              <SelectTrigger className="h-6 w-14 text-[11px] px-1">
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="lte">≤</SelectItem>
+                                <SelectItem value="gte">≥</SelectItem>
+                              </SelectContent>
+                            </Select>
+                            <NumericInput
+                              value={cond.value1}
+                              onValueChange={(v) => {
+                                const conds = getItemConditions(item)
+                                const newConds = conds.map((c, i) =>
+                                  i === ci ? { ...c, value1: v } : c
+                                )
+                                updateItem(index, {
+                                  warning: null, critical: null,
+                                  conditions: {
+                                    normal: [], critical: newConds,
+                                    coldCritical: [], dryCritical: [], humidCritical: [],
+                                  },
+                                })
+                              }}
+                              className="h-6 w-16 text-xs"
+                            />
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              className="h-5 w-5 text-muted-foreground hover:text-destructive"
+                              onClick={() => {
+                                const conds = getItemConditions(item)
+                                const newConds = conds.filter((_, i) => i !== ci)
+                                updateItem(index, {
+                                  warning: null, critical: null,
+                                  conditions: {
+                                    normal: [], critical: newConds,
+                                    coldCritical: [], dryCritical: [], humidCritical: [],
+                                  },
+                                })
+                              }}
+                            >
+                              <X className="h-3 w-3" />
+                            </Button>
+                          </div>
+                        ))}
+                        {itemType === 'custom' && (
+                          <div className="flex items-center gap-1">
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              className="h-5 px-1 text-[10px] text-muted-foreground"
+                              onClick={() => {
+                                const conds = getItemConditions(item)
+                                const newConds = [...conds, newCondition()]
+                                updateItem(index, {
+                                  warning: null, critical: null,
+                                  conditions: {
+                                    normal: [], critical: newConds,
+                                    coldCritical: [], dryCritical: [], humidCritical: [],
+                                  },
+                                })
+                              }}
+                            >
+                              <Plus className="h-3 w-3 mr-0.5" />
+                              조건
+                            </Button>
+                            <Input
+                              value={item.unit}
+                              onChange={(e) => updateItem(index, { unit: e.target.value })}
+                              placeholder="단위"
+                              className="h-5 w-12 text-[10px]"
+                            />
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </td>
+                  {/* Chart checkbox */}
+                  <td className="px-1 py-0.5 text-center">
+                    <Checkbox
+                      checked={!!item.chartGroup}
+                      onCheckedChange={(checked) =>
+                        updateItem(index, { chartGroup: checked ? item.name : null })
+                      }
+                      disabled={disabled}
+                      className="data-[state=checked]:bg-black data-[state=checked]:border-black data-[state=checked]:text-white"
+                    />
+                  </td>
+                  <td className="px-1 py-0.5 text-center">
+                    <Checkbox
+                      checked={item.alarmEnabled !== false}
+                      onCheckedChange={(checked) =>
+                        updateItem(index, { alarmEnabled: checked === true })
+                      }
+                      disabled={disabled}
+                      className="data-[state=checked]:bg-black data-[state=checked]:border-black data-[state=checked]:text-white"
+                    />
+                  </td>
+                  <td className="px-1 py-0.5 text-center">
+                    <Button
+                      type="button"
+                      size="icon"
+                      variant="ghost"
+                      className={`h-5 w-5 ${item.audioConfig?.type === 'file' && item.audioConfig.fileName ? 'text-blue-400' : 'text-muted-foreground'}`}
+                      onClick={() => setExpandedAudioRow(expandedAudioRow === index ? null : index)}
+                      disabled={disabled}
+                    >
+                      <Volume2 className="h-3 w-3" />
+                    </Button>
+                  </td>
+                  <td className="px-1 py-0.5">
+                    <Button
+                      type="button"
+                      size="icon"
+                      variant="ghost"
+                      className="h-5 w-5 text-muted-foreground hover:text-destructive"
+                      onClick={() => removeItem(index)}
+                      disabled={disabled}
+                    >
+                      <Trash2 className="h-3 w-3" />
+                    </Button>
+                  </td>
+                </tr>
+                {expandedAudioRow === index && (
+                  <tr className="bg-muted/30">
+                    <td colSpan={hasCustomCode ? 7 : 8} className="px-2 py-1">
+                      <SensorItemAudio
+                        audioConfig={item.audioConfig || { type: 'none' }}
+                        onUpdate={(ac) => updateItem(index, { audioConfig: ac })}
+                        itemIndex={index}
+                        disabled={disabled}
+                      />
                     </td>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+                )}
+                </React.Fragment>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
 
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          onClick={addItem}
-          className="w-full"
-        >
-          <Plus className="mr-2 h-4 w-4" />
-          항목 추가
-        </Button>
-      </div>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        onClick={addItem}
+        className="w-full h-6 text-xs"
+        disabled={disabled}
+      >
+        <Plus className="mr-1 h-3 w-3" />
+        항목 추가
+      </Button>
     </div>
   )
 }

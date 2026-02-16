@@ -35,8 +35,8 @@ export function startWebSocketServer(): void {
           syncSirenState()
           return
         }
-        // Relay delete and alarm messages to all OTHER clients
-        if (message.type === 'delete' || message.type === 'alarm') {
+        // Relay delete, alarm, and settings messages to all OTHER clients
+        if (message.type === 'delete' || message.type === 'alarm' || message.type === 'settings') {
           const payload = JSON.stringify(message)
           for (const client of clients) {
             if (client !== ws && client.readyState === WebSocket.OPEN) {
@@ -96,7 +96,8 @@ export function broadcastMetric(
   metricName: string,
   value: number,
   unit: string,
-  trend: 'up' | 'down' | 'stable' | null
+  trend: 'up' | 'down' | 'stable' | null,
+  textValue?: string | null
 ): void {
   broadcast({
     type: 'metric',
@@ -106,6 +107,7 @@ export function broadcastMetric(
       metricId,
       metricName,
       value,
+      textValue: textValue ?? undefined,
       unit,
       trend,
     },
@@ -140,7 +142,8 @@ export function broadcastAlarm(
   systemName: string,
   alarmId: string,
   severity: 'warning' | 'critical',
-  message: string
+  message: string,
+  value?: string | null
 ): void {
   broadcast({
     type: 'alarm',
@@ -150,6 +153,7 @@ export function broadcastAlarm(
       alarmId,
       severity,
       message,
+      alarmValue: value ?? undefined,
       acknowledged: false,
     },
     timestamp: new Date().toISOString(),
@@ -168,6 +172,25 @@ export function broadcastAlarmResolution(
     data: {
       systemId,
       systemName,
+    },
+    timestamp: new Date().toISOString(),
+  })
+}
+
+/**
+ * Broadcast targeted alarm resolution (only specific alarm IDs)
+ */
+export function broadcastAlarmResolutionByIds(
+  systemId: string,
+  systemName: string,
+  alarmIds: string[]
+): void {
+  broadcast({
+    type: 'alarm-resolved' as WebSocketMessage['type'],
+    data: {
+      systemId,
+      systemName,
+      alarmIds,
     },
     timestamp: new Date().toISOString(),
   })

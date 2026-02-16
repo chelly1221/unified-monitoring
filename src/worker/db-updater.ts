@@ -8,11 +8,13 @@ import {
   broadcastSystemStatus,
   broadcastAlarm,
   broadcastAlarmResolution,
+  broadcastAlarmResolutionByIds,
 } from './websocket-server'
 import { syncSirenState } from './siren-trigger'
 import type { EquipmentConfig, MetricsConfig, SystemStatus, DisplayItem } from '@/types'
 import { evaluateSensorStatus, isColdCritical, isDryCritical, isHumidCritical } from '@/lib/threshold-evaluator'
 import { matchesDataConditions } from '@/lib/data-match'
+import { executeCustomCode } from './custom-code-executor'
 
 const prisma = new PrismaClient()
 
@@ -26,6 +28,12 @@ const metricCriticalState = new Map<string, boolean>()
 // Per-system mutex to serialize async processing and prevent interleaving
 const systemMutexes = new Map<string, Promise<void>>()
 
+// Spike filter: rolling buffer of recent valid values per metric (sensor only)
+const spikeFilterBuffers = new Map<string, number[]>()
+const SPIKE_BUFFER_SIZE = 20
+const SPIKE_WARMUP = 5
+const SPIKE_Z_THRESHOLD = 3.5
+
 function withSystemMutex(systemId: string, fn: () => Promise<void>): Promise<void> {
   const prev = systemMutexes.get(systemId) ?? Promise.resolve()
   const next = prev.then(fn, fn)
@@ -33,13 +41,66 @@ function withSystemMutex(systemId: string, fn: () => Promise<void>): Promise<voi
   return next
 }
 
+/**
+ * Check if a new value is a spike using Modified Z-score (MAD-based).
+ * Returns true if the value should be rejected as a spike.
+ */
+function isSpikeValue(metricId: string, newValue: number, metricMin: number | null, metricMax: number | null): boolean {
+  const buffer = spikeFilterBuffers.get(metricId)
+  if (!buffer || buffer.length < SPIKE_WARMUP) return false
+
+  const sorted = [...buffer].sort((a, b) => a - b)
+  const mid = Math.floor(sorted.length / 2)
+  const median = sorted.length % 2 === 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2
+
+  const deviations = sorted.map(v => Math.abs(v - median))
+  deviations.sort((a, b) => a - b)
+  const madMid = Math.floor(deviations.length / 2)
+  const mad = deviations.length % 2 === 1 ? deviations[madMid] : (deviations[madMid - 1] + deviations[madMid]) / 2
+
+  if (mad < 0.001) {
+    // MAD ≈ 0: all values nearly identical; use range-based fallback
+    const range = (metricMin != null && metricMax != null) ? Math.abs(metricMax - metricMin) : 0
+    const minDelta = range > 0 ? range * 0.3 : 5 // 30% of range, or absolute 5 as last resort
+    const deviation = Math.abs(newValue - median)
+    if (deviation > minDelta) {
+      console.log(`[SpikeFilter] Rejected metricId=${metricId} value=${newValue} (median=${median.toFixed(2)}, MAD≈0, delta=${deviation.toFixed(2)} > ${minDelta.toFixed(2)})`)
+      return true
+    }
+    return false
+  }
+
+  const modifiedZScore = 0.6745 * Math.abs(newValue - median) / mad
+  if (modifiedZScore > SPIKE_Z_THRESHOLD) {
+    console.log(`[SpikeFilter] Rejected metricId=${metricId} value=${newValue} (median=${median.toFixed(2)}, MAD=${mad.toFixed(2)}, z=${modifiedZScore.toFixed(2)})`)
+    return true
+  }
+  return false
+}
+
+/**
+ * Add a valid value to the spike filter buffer for a metric.
+ */
+function addToSpikeBuffer(metricId: string, value: number): void {
+  let buffer = spikeFilterBuffers.get(metricId)
+  if (!buffer) {
+    buffer = []
+    spikeFilterBuffers.set(metricId, buffer)
+  }
+  buffer.push(value)
+  if (buffer.length > SPIKE_BUFFER_SIZE) {
+    buffer.shift()
+  }
+}
+
 // Offline detection interval (check every 10 seconds)
 const OFFLINE_CHECK_INTERVAL = 10000
-// Systems are marked offline after 30 seconds of no data
-const OFFLINE_THRESHOLD = 30000
+// Systems are marked offline after 60 seconds of no data
+const OFFLINE_THRESHOLD = 60000
 
 let offlineCheckInterval: ReturnType<typeof setInterval> | null = null
 let historyCleanupInterval: ReturnType<typeof setInterval> | null = null
+let isFirstCleanupRun = true
 
 /**
  * Calculate equipment status based on pattern matching
@@ -69,7 +130,7 @@ function calculateEquipmentStatus(rawData: string, config: EquipmentConfig): Sys
  * Process a single system's metric update
  */
 async function processSystemMetric(
-  system: { id: string; name: string; config: string | null; metrics: { id: string; name: string; value: number; unit: string; warningThreshold: number | null; criticalThreshold: number | null }[] },
+  system: { id: string; name: string; type: string; config: string | null; metrics: { id: string; name: string; value: number; unit: string; min: number | null; max: number | null; warningThreshold: number | null; criticalThreshold: number | null }[] },
   data: ParsedData,
   numericValue: number | null
 ): Promise<boolean> {
@@ -158,7 +219,7 @@ async function processSystemMetric(
         // Create alarm when status changes to warning or critical
         if (newStatus === 'warning' || newStatus === 'critical') {
           const severity = newStatus === 'critical' ? 'critical' : 'warning'
-          const statusLabel = newStatus === 'critical' ? '심각' : '주의'
+          const statusLabel = newStatus === 'critical' ? '심각' : '오프라인'
 
           const alarm = await prisma.alarm.create({
             data: {
@@ -202,7 +263,7 @@ async function processSystemMetric(
   if (system.config) {
     try {
       const parsed = JSON.parse(system.config)
-      if (parsed.delimiter && parsed.displayItems) {
+      if ((parsed.delimiter || parsed.customCode) && parsed.displayItems) {
         metricsConfig = parsed as MetricsConfig
       }
     } catch {
@@ -217,50 +278,110 @@ async function processSystemMetric(
     // Phase 2 evaluates system status from ALL metrics (fresh + DB-loaded),
     // preventing a normal humidity message from overriding a critical temp alarm.
 
-    const rawParts = data.value.split(metricsConfig.delimiter).map(s => s.trim())
     let anyProcessed = false
     const processedMetricNames = new Set<string>()
 
-    // === Phase 1: Update matched metric values only ===
-    for (const displayItem of metricsConfig.displayItems) {
-      // Check data match conditions (skip if raw data doesn't match)
-      if (!matchesDataConditions(data.value, displayItem.dataMatchConditions)) continue
+    // === Phase 1: Update matched metric values ===
+    let customCodeRan = false
+    if (metricsConfig.customCode?.trim()) {
+      // Custom code path: run user code to extract metric values
+      const codeResult = executeCustomCode(system.id, metricsConfig.customCode, data.value)
+      if (codeResult === null) {
+        return false // Custom code execution error, skip
+      }
+      customCodeRan = true
+      for (const [metricName, val] of Object.entries(codeResult)) {
+        const displayItem = metricsConfig.displayItems.find(d => d.name === metricName)
+        if (!displayItem) continue
+        const metric = system.metrics.find(m => m.name === metricName)
+        if (!metric) continue
 
-      // When dataMatchConditions are used, the entire message may be for this metric
-      // (e.g. "hd55.0" arrives as a separate message, so index 1 won't exist).
-      // Fall back to the full raw data string for numeric extraction.
-      const rawVal = rawParts[displayItem.index] ?? (displayItem.dataMatchConditions?.length ? data.value : undefined)
-      if (rawVal === undefined) continue
-      // Extract numeric value from raw part (handles prefixed data like "td25.5")
-      const numMatch = rawVal.match(/-?\d+\.?\d*/)
-      if (!numMatch) continue
-      const val = parseFloat(numMatch[0])
-      if (isNaN(val)) continue
+        anyProcessed = true
+        processedMetricNames.add(metricName)
 
-      anyProcessed = true
-      processedMetricNames.add(displayItem.name)
+        if (typeof val === 'string') {
+          // Text metric: store in textValue, keep numeric value as 0
+          const changed = (metric as unknown as { textValue?: string | null }).textValue !== val
+          await prisma.metric.update({
+            where: { id: metric.id },
+            data: { textValue: val, trend: changed ? 'stable' : 'stable', updatedAt: new Date() },
+          })
+          ;(metric as unknown as { textValue?: string | null }).textValue = val
+          broadcastMetric(system.id, system.name, metric.id, metric.name, metric.value, metric.unit, 'stable', val)
+        } else {
+          // Spike filter for sensor systems
+          if (system.type === 'sensor' && isSpikeValue(metric.id, val, metric.min, metric.max)) {
+            continue
+          }
+          if (system.type === 'sensor') addToSpikeBuffer(metric.id, val)
 
-      // Find matching metric in DB
-      const metric = system.metrics.find(m => m.name === displayItem.name)
-      if (!metric) continue
+          const oldValue = metric.value
+          const trend = val > oldValue ? 'up' : val < oldValue ? 'down' : 'stable'
 
-      const oldValue = metric.value
-      const trend = val > oldValue ? 'up' : val < oldValue ? 'down' : 'stable'
+          await prisma.metric.update({
+            where: { id: metric.id },
+            data: { value: val, textValue: null, trend, updatedAt: new Date() },
+          })
 
-      await prisma.metric.update({
-        where: { id: metric.id },
-        data: { value: val, trend, updatedAt: new Date() },
-      })
+          metric.value = val
 
-      // Keep local copy in sync so Phase 2 sees fresh values
-      metric.value = val
+          await prisma.metricHistory.create({
+            data: { metricId: metric.id, value: val },
+          })
 
-      // Record metric history for charts
-      await prisma.metricHistory.create({
-        data: { metricId: metric.id, value: val },
-      })
+          broadcastMetric(system.id, system.name, metric.id, metric.name, val, metric.unit, trend)
+        }
+      }
+    } else {
+      // Standard delimiter path
+      const rawParts = data.value.split(metricsConfig.delimiter).map(s => s.trim())
 
-      broadcastMetric(system.id, system.name, metric.id, metric.name, val, metric.unit, trend)
+      for (const displayItem of metricsConfig.displayItems) {
+        // Check data match conditions (skip if raw data doesn't match)
+        if (!matchesDataConditions(data.value, displayItem.dataMatchConditions)) continue
+
+        // When dataMatchConditions are used, the entire message may be for this metric
+        // (e.g. "hd55.0" arrives as a separate message, so index 1 won't exist).
+        // Fall back to the full raw data string for numeric extraction.
+        const rawVal = rawParts[displayItem.index] ?? (displayItem.dataMatchConditions?.length ? data.value : undefined)
+        if (rawVal === undefined) continue
+        // Extract numeric value from raw part (handles prefixed data like "td25.5")
+        const numMatch = rawVal.match(/-?\d+\.?\d*/)
+        if (!numMatch) continue
+        const val = parseFloat(numMatch[0])
+        if (isNaN(val)) continue
+
+        anyProcessed = true
+        processedMetricNames.add(displayItem.name)
+
+        // Find matching metric in DB
+        const metric = system.metrics.find(m => m.name === displayItem.name)
+        if (!metric) continue
+
+        // Spike filter for sensor systems
+        if (system.type === 'sensor' && isSpikeValue(metric.id, val, metric.min, metric.max)) {
+          continue
+        }
+        if (system.type === 'sensor') addToSpikeBuffer(metric.id, val)
+
+        const oldValue = metric.value
+        const trend = val > oldValue ? 'up' : val < oldValue ? 'down' : 'stable'
+
+        await prisma.metric.update({
+          where: { id: metric.id },
+          data: { value: val, trend, updatedAt: new Date() },
+        })
+
+        // Keep local copy in sync so Phase 2 sees fresh values
+        metric.value = val
+
+        // Record metric history for charts
+        await prisma.metricHistory.create({
+          data: { metricId: metric.id, value: val },
+        })
+
+        broadcastMetric(system.id, system.name, metric.id, metric.name, val, metric.unit, trend)
+      }
     }
 
     // === Phase 2: Per-metric counter + derive system status ===
@@ -278,11 +399,31 @@ async function processSystemMetric(
 
           // Evaluate this metric's raw status
           let itemStatus: SystemStatus = 'normal'
-          if (displayItem.conditions) {
-            itemStatus = evaluateSensorStatus(val, displayItem.conditions)
+          // Respect alarmEnabled flag for all items (including those with conditions)
+          if (displayItem.alarmEnabled === false) {
+            itemStatus = 'normal'
           } else {
-            if (displayItem.critical !== null && val >= displayItem.critical) itemStatus = 'critical'
-            else if (displayItem.warning !== null && val >= displayItem.warning) itemStatus = 'warning'
+            const textVal = (metric as unknown as { textValue?: string | null }).textValue
+            if (displayItem.conditions) {
+              if (textVal != null) {
+                // Text metric: evaluate string conditions (eq/neq)
+                for (const cond of displayItem.conditions.critical || []) {
+                  const target = cond.stringValue ?? String(cond.value1)
+                  if (cond.operator === 'eq' && textVal === target) { itemStatus = 'critical'; break }
+                  if (cond.operator === 'neq' && textVal !== target) { itemStatus = 'critical'; break }
+                }
+              } else {
+                itemStatus = evaluateSensorStatus(val, displayItem.conditions)
+                // If conditions exist but have no critical conditions, fall back to legacy thresholds
+                if (itemStatus === 'normal' && !(displayItem.conditions.critical?.length || displayItem.conditions.coldCritical?.length || displayItem.conditions.dryCritical?.length || displayItem.conditions.humidCritical?.length)) {
+                  if (displayItem.critical !== null && val >= displayItem.critical) itemStatus = 'critical'
+                  else if (displayItem.warning !== null && val <= displayItem.warning) itemStatus = 'critical'
+                }
+              }
+            } else {
+              if (displayItem.critical !== null && val >= displayItem.critical) itemStatus = 'critical'
+              else if (displayItem.warning !== null && val <= displayItem.warning) itemStatus = 'critical'
+            }
           }
 
           // Per-metric critical counter
@@ -309,6 +450,7 @@ async function processSystemMetric(
         let dryTriggered = false
         let humidTriggered = false
         let hotTriggered = false
+        const triggerValues: Record<string, string> = {}
 
         for (const displayItem of metricsConfig!.displayItems) {
           const counterKey = `${system.id}:${displayItem.name}`
@@ -317,30 +459,50 @@ async function processSystemMetric(
 
           if (metricCriticalState.get(counterKey)) {
             worstStatus = 'critical'
+            const valueStr = `${metric.value}${displayItem.unit}`
             // Determine trigger type for alarm message
             if (displayItem.conditions) {
-              if (isColdCritical(metric.value, displayItem.conditions)) coldTriggered = true
-              else if (isDryCritical(metric.value, displayItem.conditions)) dryTriggered = true
-              else if (isHumidCritical(metric.value, displayItem.conditions)) humidTriggered = true
-              else hotTriggered = true
+              if (system.type === 'sensor') {
+                // Sensor: distinguish 고온/저온/건조/다습
+                if (isColdCritical(metric.value, displayItem.conditions)) { coldTriggered = true; triggerValues['저온 경고'] = valueStr }
+                else if (isDryCritical(metric.value, displayItem.conditions)) { dryTriggered = true; triggerValues['건조 경고'] = valueStr }
+                else if (isHumidCritical(metric.value, displayItem.conditions)) { humidTriggered = true; triggerValues['다습 경고'] = valueStr }
+                else { hotTriggered = true; triggerValues['고온 경고'] = valueStr }
+              } else {
+                // UPS/other: per-item threshold key
+                triggerValues[`${displayItem.name} 임계치 초과`] = valueStr
+              }
             } else {
-              if (displayItem.name.includes('온도')) hotTriggered = true
-              else if (displayItem.name.includes('습도')) humidTriggered = true
+              if (displayItem.critical !== null && metric.value >= displayItem.critical) { hotTriggered = true; triggerValues[`${displayItem.name} 임계치 초과`] = valueStr }
+              if (displayItem.warning !== null && metric.value <= displayItem.warning) { coldTriggered = true; triggerValues[`${displayItem.name} 임계치 초과`] = valueStr }
             }
           } else {
-            // Check warning status (no counter needed for warning)
-            if (!displayItem.conditions) {
-              if (displayItem.warning !== null && metric.value >= displayItem.warning && worstStatus !== 'critical') {
-                worstStatus = 'warning'
+            // Check threshold status (no counter needed)
+            if (!displayItem.conditions && displayItem.alarmEnabled !== false) {
+              const valueStr = `${metric.value}${displayItem.unit}`
+              if (displayItem.critical !== null && metric.value >= displayItem.critical && worstStatus !== 'critical') {
+                worstStatus = 'critical'
+                triggerValues[`${displayItem.name} 임계치 초과`] = valueStr
+              } else if (displayItem.warning !== null && metric.value <= displayItem.warning && worstStatus !== 'critical') {
+                worstStatus = 'critical'
+                triggerValues[`${displayItem.name} 임계치 초과`] = valueStr
               }
             }
           }
         }
 
-        await updateSensorSystemStatus(system.id, system.name, worstStatus, coldTriggered, dryTriggered, humidTriggered, hotTriggered)
+        const allItemLabels = system.type !== 'sensor'
+          ? metricsConfig!.displayItems
+              .filter(d => d.alarmEnabled !== false)
+              .map(d => `${d.name} 임계치 초과`)
+          : undefined
+        await updateSensorSystemStatus(system.id, system.name, worstStatus, coldTriggered, dryTriggered, humidTriggered, hotTriggered, system.type, triggerValues, allItemLabels)
       })
     }
-    return anyProcessed
+    // For custom code: even if this particular line didn't match any metrics
+    // (e.g. apcupsd HOSTNAME line), the code ran successfully so we should
+    // update lastDataAt to prevent false offline detection.
+    return anyProcessed || customCodeRan
   }
 
   if (numericValue !== null && system.metrics.length > 0) {
@@ -374,7 +536,7 @@ async function processSystemMetric(
     )
 
     // Check thresholds and update system status
-    await updateSystemStatus(system.id, system.name, numericValue, metric)
+    await updateSystemStatus(system.id, system.name, numericValue, metric, metric.unit)
     return true
   }
 
@@ -447,14 +609,15 @@ async function updateSystemStatus(
   systemId: string,
   systemName: string,
   value: number,
-  metric: { warningThreshold: number | null; criticalThreshold: number | null }
+  metric: { warningThreshold: number | null; criticalThreshold: number | null },
+  unit: string = ''
 ): Promise<void> {
   let status: 'normal' | 'warning' | 'critical' = 'normal'
 
   if (metric.criticalThreshold !== null && value >= metric.criticalThreshold) {
     status = 'critical'
-  } else if (metric.warningThreshold !== null && value >= metric.warningThreshold) {
-    status = 'warning'
+  } else if (metric.warningThreshold !== null && value <= metric.warningThreshold) {
+    status = 'critical'
   }
 
   // Fetch current system status (used for both counter suppression and change detection)
@@ -519,14 +682,16 @@ async function updateSystemStatus(
 
     // Create alarm when status changes to warning or critical
     if (status === 'warning' || status === 'critical') {
-      const severity = status === 'critical' ? 'critical' : 'warning'
-      const statusLabel = status === 'critical' ? '심각' : '주의'
+      const severity = 'critical' as const
+      const statusLabel = '임계치 초과'
+      const alarmValue = `${value}${unit}`
 
       const alarm = await prisma.alarm.create({
         data: {
           systemId,
           severity,
           message: `${systemName} ${statusLabel} 상태`,
+          value: alarmValue,
         },
       })
 
@@ -536,6 +701,7 @@ async function updateSystemStatus(
           systemName,
           severity,
           message: `${systemName} ${statusLabel} 상태`,
+          value: alarmValue,
         },
       })
 
@@ -544,7 +710,8 @@ async function updateSystemStatus(
         systemName,
         alarm.id,
         severity,
-        `${systemName} ${statusLabel} 상태`
+        `${systemName} ${statusLabel} 상태`,
+        alarmValue
       )
 
       console.log(`[db-updater] Alarm created for ${systemName}: ${statusLabel}`)
@@ -565,38 +732,46 @@ async function updateSensorSystemStatus(
   coldTriggered: boolean,
   dryTriggered: boolean,
   humidTriggered: boolean,
-  hotTriggered: boolean
+  hotTriggered: boolean,
+  systemType: string = 'sensor',
+  triggerValues: Record<string, string> = {},
+  allItemLabels?: string[]
 ): Promise<void> {
   const currentSystem = await prisma.system.findUnique({
     where: { id: systemId },
     select: { status: true },
   })
 
-  if (!currentSystem || currentSystem.status === status) {
-    // Defensive: resolve stale alarms if system is normal but has unresolved alarms
-    if (status === 'normal' && currentSystem) {
-      const staleAlarms = await prisma.alarm.updateMany({
-        where: { systemId, resolvedAt: null },
-        data: { resolvedAt: new Date() },
-      })
-      if (staleAlarms.count > 0) {
-        console.log(`[db-updater] Cleaned up ${staleAlarms.count} stale alarm(s) for ${systemName}`)
-        broadcastAlarmResolution(systemId, systemName)
-        await syncSirenState()
-      }
+  if (!currentSystem) return
+
+  const statusChanged = currentSystem.status !== status
+
+  // Normal + unchanged: just clean stale alarms and return
+  if (status === 'normal' && !statusChanged) {
+    const staleAlarms = await prisma.alarm.updateMany({
+      where: { systemId, resolvedAt: null },
+      data: { resolvedAt: new Date() },
+    })
+    if (staleAlarms.count > 0) {
+      console.log(`[db-updater] Cleaned up ${staleAlarms.count} stale alarm(s) for ${systemName}`)
+      broadcastAlarmResolution(systemId, systemName)
+      await syncSirenState()
     }
     return
   }
 
-  await prisma.system.update({
-    where: { id: systemId },
-    data: { status },
-  })
+  // Update system status only if changed
+  if (statusChanged) {
+    await prisma.system.update({
+      where: { id: systemId },
+      data: { status },
+    })
 
-  broadcastSystemStatus(systemId, systemName, status)
+    broadcastSystemStatus(systemId, systemName, status)
+  }
 
-  // Resolve alarms when system returns to normal
-  if (status === 'normal' && currentSystem.status !== 'normal') {
+  // Resolve all alarms when system returns to normal
+  if (status === 'normal') {
     const resolvedCount = await prisma.alarm.updateMany({
       where: { systemId, resolvedAt: null },
       data: { resolvedAt: new Date() },
@@ -610,36 +785,102 @@ async function updateSensorSystemStatus(
     await syncSirenState()
   }
 
-  // Create alarm when status changes to warning or critical
+  // Create one alarm per triggered type (warning or critical)
   if (status === 'warning' || status === 'critical') {
     const severity = status === 'critical' ? 'critical' : 'warning'
-    const statusLabel = hotTriggered ? '고온 경고'
-      : coldTriggered ? '저온 경고'
-      : dryTriggered ? '건조 경고'
-      : humidTriggered ? '다습 경고'
-      : status === 'critical' ? '심각' : '주의'
 
-    const alarm = await prisma.alarm.create({
-      data: {
-        systemId,
-        severity,
-        message: `${systemName} ${statusLabel} 상태`,
-      },
-    })
+    const triggeredLabels: string[] = []
+    if (systemType === 'sensor') {
+      if (hotTriggered) triggeredLabels.push('고온 경고')
+      if (coldTriggered) triggeredLabels.push('저온 경고')
+      if (dryTriggered) triggeredLabels.push('건조 경고')
+      if (humidTriggered) triggeredLabels.push('다습 경고')
+    }
+    if (triggeredLabels.length === 0) {
+      const tvKeys = Object.keys(triggerValues)
+      if (tvKeys.length > 0) {
+        triggeredLabels.push(...tvKeys)
+      } else {
+        triggeredLabels.push(status === 'critical' ? '임계치 초과' : '오프라인')
+      }
+    }
 
-    await prisma.alarmLog.create({
-      data: {
-        systemId,
-        systemName,
-        severity,
-        message: `${systemName} ${statusLabel} 상태`,
-      },
-    })
+    let created = false
+    for (const statusLabel of triggeredLabels) {
+      const message = `${systemName} ${statusLabel} 상태`
+      // Skip if unresolved alarm with this message already exists
+      const existing = await prisma.alarm.findFirst({
+        where: { systemId, message, resolvedAt: null },
+      })
+      if (existing) {
+        // Update value on existing alarm if not yet set
+        const alarmVal = triggerValues[statusLabel] ?? null
+        if (alarmVal && !existing.value) {
+          await prisma.alarm.update({
+            where: { id: existing.id },
+            data: { value: alarmVal },
+          })
+        }
+        continue
+      }
 
-    broadcastAlarm(systemId, systemName, alarm.id, severity, `${systemName} ${statusLabel} 상태`)
-    console.log(`[db-updater] Alarm created for ${systemName}: ${statusLabel}`)
+      const alarmValue = triggerValues[statusLabel] ?? null
+      const alarm = await prisma.alarm.create({
+        data: { systemId, severity, message, value: alarmValue },
+      })
 
-    await syncSirenState()
+      await prisma.alarmLog.create({
+        data: { systemId, systemName, severity, message, value: alarmValue },
+      })
+
+      broadcastAlarm(systemId, systemName, alarm.id, severity, message, alarmValue)
+      console.log(`[db-updater] Alarm created for ${systemName}: ${statusLabel}`)
+      created = true
+    }
+
+    // Clean up legacy generic "임계치 초과" alarms for non-sensor systems
+    const resolvedAlarmIds: string[] = []
+    if (systemType !== 'sensor') {
+      const legacyMessage = `${systemName} 임계치 초과 상태`
+      const legacyAlarms = await prisma.alarm.findMany({
+        where: { systemId, message: legacyMessage, resolvedAt: null },
+        select: { id: true },
+      })
+      if (legacyAlarms.length > 0) {
+        await prisma.alarm.updateMany({
+          where: { id: { in: legacyAlarms.map(a => a.id) } },
+          data: { resolvedAt: new Date() },
+        })
+        resolvedAlarmIds.push(...legacyAlarms.map(a => a.id))
+        console.log(`[db-updater] Resolved legacy generic alarm(s) for ${systemName}`)
+      }
+    }
+
+    // Resolve alarms for types no longer triggered
+    const allLabels = systemType === 'sensor'
+      ? ['고온 경고', '저온 경고', '건조 경고', '다습 경고']
+      : allItemLabels || ['임계치 초과']
+    const untriggeredLabels = allLabels.filter(l => !triggeredLabels.includes(l))
+    for (const label of untriggeredLabels) {
+      const message = `${systemName} ${label} 상태`
+      const toResolve = await prisma.alarm.findMany({
+        where: { systemId, message, resolvedAt: null },
+        select: { id: true },
+      })
+      if (toResolve.length > 0) {
+        await prisma.alarm.updateMany({
+          where: { id: { in: toResolve.map(a => a.id) } },
+          data: { resolvedAt: new Date() },
+        })
+        resolvedAlarmIds.push(...toResolve.map(a => a.id))
+        console.log(`[db-updater] Resolved ${label} alarm(s) for ${systemName}`)
+      }
+    }
+    if (resolvedAlarmIds.length > 0) {
+      broadcastAlarmResolutionByIds(systemId, systemName, resolvedAlarmIds)
+    }
+
+    if (created || resolvedAlarmIds.length > 0) await syncSirenState()
   }
 }
 
@@ -711,12 +952,128 @@ export async function processAlarm(config: PortConfig, data: ParsedData): Promis
 }
 
 /**
+ * Create alarm records for systems that are already offline but have no active alarm.
+ * Called at worker startup to catch systems that were offline before the worker started.
+ */
+export async function syncOfflineAlarms(): Promise<void> {
+  try {
+    const offlineSystems = await prisma.system.findMany({
+      where: {
+        isEnabled: true,
+        isActive: true,
+        status: 'offline',
+        alarms: { none: { resolvedAt: null } },
+      },
+    })
+
+    for (const sys of offlineSystems) {
+      // UPS type: always use 'critical' severity
+      const severity = sys.type === 'ups' ? 'critical' as const : 'warning' as const
+      const alarm = await prisma.alarm.create({
+        data: {
+          systemId: sys.id,
+          severity,
+          message: `${sys.name} 오프라인`,
+        },
+      })
+
+      broadcastAlarm(sys.id, sys.name, alarm.id, severity, `${sys.name} 오프라인`)
+      console.log(`[db-updater] Created offline alarm for ${sys.name} (sync, severity=${severity})`)
+    }
+
+    // Also sync critical/warning UPS systems that have no active alarm
+    const criticalUpsSystems = await prisma.system.findMany({
+      where: {
+        isEnabled: true,
+        isActive: true,
+        type: 'ups',
+        status: { in: ['critical', 'warning'] },
+        alarms: { none: { resolvedAt: null } },
+      },
+      include: { metrics: true },
+    })
+
+    for (const sys of criticalUpsSystems) {
+      let metricsConfig: MetricsConfig | null = null
+      if (sys.config) {
+        try {
+          const parsed = JSON.parse(sys.config)
+          if ((parsed.delimiter || parsed.customCode) && parsed.displayItems) {
+            metricsConfig = parsed as MetricsConfig
+          }
+        } catch { /* ignore */ }
+      }
+
+      if (metricsConfig) {
+        let anyCreated = false
+        for (const displayItem of metricsConfig.displayItems) {
+          if (displayItem.alarmEnabled === false) continue
+          const metric = sys.metrics.find(m => m.name === displayItem.name)
+          if (!metric) continue
+
+          let exceeded = false
+          if (displayItem.conditions) {
+            const itemStatus = evaluateSensorStatus(metric.value, displayItem.conditions)
+            exceeded = itemStatus === 'critical'
+          } else {
+            if (displayItem.critical !== null && metric.value >= displayItem.critical) exceeded = true
+            else if (displayItem.warning !== null && metric.value <= displayItem.warning) exceeded = true
+          }
+          if (!exceeded) continue
+
+          const statusLabel = `${displayItem.name} 임계치 초과`
+          const message = `${sys.name} ${statusLabel} 상태`
+          const value = `${metric.value}${displayItem.unit}`
+
+          const alarm = await prisma.alarm.create({
+            data: { systemId: sys.id, severity: 'critical', message, value },
+          })
+          await prisma.alarmLog.create({
+            data: { systemId: sys.id, systemName: sys.name, severity: 'critical', message, value },
+          })
+          broadcastAlarm(sys.id, sys.name, alarm.id, 'critical', message, value)
+          anyCreated = true
+        }
+        if (!anyCreated) {
+          // Fallback: no individual item exceeded, create generic alarm
+          const alarm = await prisma.alarm.create({
+            data: { systemId: sys.id, severity: 'critical', message: `${sys.name} 임계치 초과 상태` },
+          })
+          await prisma.alarmLog.create({
+            data: { systemId: sys.id, systemName: sys.name, severity: 'critical', message: `${sys.name} 임계치 초과 상태` },
+          })
+          broadcastAlarm(sys.id, sys.name, alarm.id, 'critical', `${sys.name} 임계치 초과 상태`)
+        }
+      } else {
+        // No metrics config: fallback to generic alarm
+        const alarm = await prisma.alarm.create({
+          data: { systemId: sys.id, severity: 'critical', message: `${sys.name} 임계치 초과 상태` },
+        })
+        await prisma.alarmLog.create({
+          data: { systemId: sys.id, systemName: sys.name, severity: 'critical', message: `${sys.name} 임계치 초과 상태` },
+        })
+        broadcastAlarm(sys.id, sys.name, alarm.id, 'critical', `${sys.name} 임계치 초과 상태`)
+      }
+
+      console.log(`[db-updater] Created critical alarm for UPS ${sys.name} (sync)`)
+    }
+
+    const totalSynced = offlineSystems.length + criticalUpsSystems.length
+    if (totalSynced > 0) {
+      console.log(`[db-updater] Synced ${totalSynced} alarm(s) (${offlineSystems.length} offline, ${criticalUpsSystems.length} UPS critical)`)
+    }
+  } catch (error) {
+    console.error('[db-updater] Error syncing offline alarms:', error)
+  }
+}
+
+/**
  * Start the offline detection check interval
  */
 export function startOfflineDetection(): void {
   if (offlineCheckInterval) return
 
-  console.log('[db-updater] Starting offline detection (30s threshold)')
+  console.log('[db-updater] Starting offline detection (60s threshold)')
 
   offlineCheckInterval = setInterval(async () => {
     try {
@@ -743,12 +1100,15 @@ export function startOfflineDetection(): void {
             data: { status: 'offline' },
           })
 
+          // UPS type: always use 'critical' severity
+          const severity = system.type === 'ups' ? 'critical' as const : 'warning' as const
+
           // Create offline alarm
           const alarm = await prisma.alarm.create({
             data: {
               systemId: system.id,
-              severity: 'warning',
-              message: `${system.name} 오프라인 (30초 이상 데이터 없음)`,
+              severity,
+              message: `${system.name} 오프라인 (1분 이상 데이터 없음)`,
             },
           })
 
@@ -757,8 +1117,8 @@ export function startOfflineDetection(): void {
             data: {
               systemId: system.id,
               systemName: system.name,
-              severity: 'warning',
-              message: `${system.name} 오프라인 (30초 이상 데이터 없음)`,
+              severity,
+              message: `${system.name} 오프라인 (1분 이상 데이터 없음)`,
             },
           })
 
@@ -768,8 +1128,8 @@ export function startOfflineDetection(): void {
             system.id,
             system.name,
             alarm.id,
-            'warning',
-            `${system.name} 오프라인 (30초 이상 데이터 없음)`
+            severity,
+            `${system.name} 오프라인 (1분 이상 데이터 없음)`
           )
         }
       }
@@ -791,12 +1151,19 @@ export function stopOfflineDetection(): void {
 }
 
 /**
- * Start periodic cleanup of old metric history (keeps 25 hours, runs every hour)
+ * Start periodic cleanup and downsampling of metric history.
+ * Retention policy:
+ *   - Raw data: 7 days
+ *   - 10-min averages: 7–31 days
+ *   - 30-min averages: 31–365 days
+ *   - Delete: >365 days
+ * Runs every hour.
  */
 export function startHistoryCleanup(): void {
   if (historyCleanupInterval) return
 
-  console.log('[db-updater] Starting metric history cleanup (25h retention)')
+  console.log('[db-updater] Starting metric history cleanup (365d tiered retention)')
+  isFirstCleanupRun = true
 
   // Run cleanup immediately on start
   cleanOldHistory()
@@ -806,16 +1173,120 @@ export function startHistoryCleanup(): void {
 
 async function cleanOldHistory(): Promise<void> {
   try {
-    const cutoff = new Date(Date.now() - 25 * 60 * 60 * 1000) // 25 hours ago
-    const result = await prisma.metricHistory.deleteMany({
-      where: { recordedAt: { lt: cutoff } },
+    const now = Date.now()
+    const DAY = 24 * 60 * 60 * 1000
+    const HOUR = 60 * 60 * 1000
+    const yearCutoff = new Date(now - 365 * DAY)
+    const d31 = new Date(now - 31 * DAY)
+    const d7 = new Date(now - 7 * DAY)
+
+    // 1. Delete data older than 365 days
+    const deleted = await prisma.metricHistory.deleteMany({
+      where: { recordedAt: { lt: yearCutoff } },
     })
-    if (result.count > 0) {
-      console.log(`[db-updater] Cleaned ${result.count} old metric history records`)
+    if (deleted.count > 0) {
+      console.log(`[db-updater] Deleted ${deleted.count} records older than 365 days`)
+    }
+
+    if (isFirstCleanupRun) {
+      // Full-range processing on startup (catches up after extended downtime)
+      isFirstCleanupRun = false
+
+      const r30 = await downsampleRange(yearCutoff, d31, 30)
+      if (r30 > 0) console.log(`[db-updater] Startup 30-min downsample: reduced ${r30} records`)
+
+      const r10 = await downsampleRange(d31, d7, 10)
+      if (r10 > 0) console.log(`[db-updater] Startup 10-min downsample: reduced ${r10} records`)
+    } else {
+      // Incremental: only process 2-hour windows at each boundary
+
+      // 31-day boundary → downsample to 30-min averages
+      const r30 = await downsampleRange(
+        new Date(now - 31 * DAY - 2 * HOUR),
+        d31,
+        30,
+      )
+      if (r30 > 0) console.log(`[db-updater] 30-min downsample: reduced ${r30} records`)
+
+      // 7-day boundary → downsample to 10-min averages
+      const r10 = await downsampleRange(
+        new Date(now - 7 * DAY - 2 * HOUR),
+        d7,
+        10,
+      )
+      if (r10 > 0) console.log(`[db-updater] 10-min downsample: reduced ${r10} records`)
     }
   } catch (error) {
     console.error('[db-updater] History cleanup error:', error)
   }
+}
+
+/**
+ * Downsample MetricHistory records in a time range to the specified interval.
+ * Groups records by metricId and time bucket, replaces with averaged values.
+ * Skips if data is already at the target resolution.
+ * Returns the number of records reduced.
+ */
+async function downsampleRange(
+  rangeStart: Date,
+  rangeEnd: Date,
+  intervalMinutes: number,
+): Promise<number> {
+  if (rangeStart >= rangeEnd) return 0
+
+  const intervalSeconds = intervalMinutes * 60
+  const startISO = rangeStart.toISOString()
+  const endISO = rangeEnd.toISOString()
+
+  // Count current records in range
+  const currentCount = await prisma.metricHistory.count({
+    where: { recordedAt: { gte: rangeStart, lt: rangeEnd } },
+  })
+  if (currentCount === 0) return 0
+
+  // Get averaged data grouped by metric and time bucket
+  const averaged = await prisma.$queryRawUnsafe<
+    Array<{ metricId: string; avgValue: number; bucketEpoch: bigint }>
+  >(
+    `SELECT
+       metricId,
+       AVG(value) as avgValue,
+       (CAST(strftime('%s', recordedAt) AS INTEGER) / ${intervalSeconds}) * ${intervalSeconds} as bucketEpoch
+     FROM metric_history
+     WHERE recordedAt >= ? AND recordedAt < ?
+     GROUP BY metricId, bucketEpoch`,
+    startISO,
+    endISO,
+  )
+
+  // If bucket count matches record count, already at target resolution
+  if (averaged.length >= currentCount) return 0
+
+  // Replace records with downsampled versions in a single transaction
+  await prisma.$transaction(
+    async (tx) => {
+      // Delete all records in range
+      await tx.$executeRawUnsafe(
+        `DELETE FROM metric_history WHERE recordedAt >= ? AND recordedAt < ?`,
+        startISO,
+        endISO,
+      )
+
+      // Insert averaged records
+      for (const row of averaged) {
+        const ts = new Date(Number(row.bucketEpoch) * 1000).toISOString()
+        await tx.$executeRawUnsafe(
+          `INSERT INTO metric_history (id, metricId, value, recordedAt) VALUES (lower(hex(randomblob(12))), ?, ?, ?)`,
+          row.metricId,
+          Number(row.avgValue),
+          ts,
+        )
+      }
+    },
+    { timeout: 120000 },
+  )
+
+  return currentCount - averaged.length
 }
 
 /**

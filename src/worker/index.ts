@@ -2,7 +2,7 @@
 
 import { startUdpListeners, stopUdpListeners } from './udp-listener'
 import { startTcpListeners, stopTcpListeners } from './tcp-listener'
-import { closeDatabase, startOfflineDetection, startHistoryCleanup } from './db-updater'
+import { closeDatabase, startOfflineDetection, startHistoryCleanup, syncOfflineAlarms } from './db-updater'
 import { startWebSocketServer, stopWebSocketServer } from './websocket-server'
 import { resetSirens, syncSirenState } from './siren-trigger'
 import { UDP_PORTS, TCP_PORTS } from './config'
@@ -40,6 +40,9 @@ startHistoryCleanup()
 
 // Sync siren state on startup (activate if unresolved critical alarms exist)
 syncSirenState()
+
+// Create alarms for systems already offline at startup
+syncOfflineAlarms()
 
 console.log('\n' + '-'.repeat(60))
 console.log('Worker is running. Press Ctrl+C to stop.\n')

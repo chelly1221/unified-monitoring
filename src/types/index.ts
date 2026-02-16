@@ -13,6 +13,8 @@ export type AlarmSeverity = 'warning' | 'critical'
 
 export type TrendDirection = 'up' | 'down' | 'stable'
 
+export type MetricItemType = 'inputVoltage' | 'outputVoltage' | 'batteryVoltage' | 'inputCurrent' | 'outputCurrent' | 'batteryCurrent' | 'inputFrequency' | 'outputFrequency' | 'load' | 'temperature' | 'status' | 'batteryRemaining' | 'custom'
+
 // Equipment config: pattern-based status detection
 export interface EquipmentConfig {
   normalPatterns: string[]
@@ -21,12 +23,13 @@ export interface EquipmentConfig {
 }
 
 // Condition-based threshold types (for sensor)
-export type ConditionOperator = 'between' | 'gte' | 'lte'
+export type ConditionOperator = 'between' | 'gte' | 'lte' | 'eq' | 'neq'
 
 export interface ThresholdCondition {
   operator: ConditionOperator
   value1: number          // between: lower bound, gte/lte: threshold value
   value2: number | null   // between: upper bound, others: null
+  stringValue?: string    // eq/neq: text-based comparison (status type)
 }
 
 export interface StatusConditions {
@@ -49,8 +52,12 @@ export interface DisplayItem {
   name: string
   index: number
   unit: string
-  warning: number | null
-  critical: number | null
+  itemType?: MetricItemType
+  warning: number | null       // UPS: 하한치 (lower limit), alarm if value <= this
+  critical: number | null      // UPS: 상한치 (upper limit), alarm if value >= this
+  chartEnabled?: boolean       // DEPRECATED, kept for backward compat read
+  chartGroup?: string | null   // UPS: free-form chart group name (e.g. '입력전압', 'R상', '배터리') | null
+  alarmEnabled?: boolean       // UPS: enable alarm for this metric (default true)
   conditions?: StatusConditions  // sensor condition mode (if present, use conditions instead of warning/critical)
   audioConfig?: AudioConfig      // per-item audio alert (sensor only)
   dataMatchConditions?: DataMatchCondition[]  // data matching filter (sensor only)
@@ -60,6 +67,7 @@ export interface DisplayItem {
 export interface MetricsConfig {
   delimiter: string
   displayItems: DisplayItem[]
+  customCode?: string
 }
 
 // Union type for system config
@@ -88,6 +96,7 @@ export interface Metric {
   systemId: string
   name: string
   value: number
+  textValue?: string | null
   unit: string
   min: number | null
   max: number | null
@@ -103,6 +112,7 @@ export interface Alarm {
   systemId: string
   severity: AlarmSeverity
   message: string
+  value: string | null
   acknowledged: boolean
   acknowledgedAt: Date | null
   acknowledgedBy: string | null
@@ -117,6 +127,7 @@ export interface AlarmLog {
   systemName: string
   severity: AlarmSeverity
   message: string
+  value: string | null
   createdAt: Date
 }
 
@@ -161,6 +172,7 @@ export interface PrismaMetric {
   systemId: string
   name: string
   value: number
+  textValue?: string | null
   unit: string
   min: number | null
   max: number | null
@@ -176,6 +188,7 @@ export interface PrismaAlarm {
   systemId: string
   severity: string
   message: string
+  value: string | null
   acknowledged: boolean
   acknowledgedAt: Date | null
   acknowledgedBy: string | null
@@ -185,7 +198,7 @@ export interface PrismaAlarm {
 }
 
 // WebSocket message types
-export type WebSocketMessageType = 'metric' | 'alarm' | 'alarm-resolved' | 'system' | 'init' | 'ping' | 'delete' | 'raw' | 'siren-sync'
+export type WebSocketMessageType = 'metric' | 'alarm' | 'alarm-resolved' | 'system' | 'init' | 'ping' | 'delete' | 'raw' | 'siren-sync' | 'settings'
 
 export interface WebSocketMessage {
   type: WebSocketMessageType
@@ -197,6 +210,7 @@ export interface WebSocketMessage {
     metricId?: string
     metricName?: string
     value?: number
+    textValue?: string | null
     unit?: string
     trend?: TrendDirection | null
     // For alarms
@@ -204,11 +218,18 @@ export interface WebSocketMessage {
     alarmIds?: string[]
     severity?: AlarmSeverity
     message?: string
+    alarmValue?: string | null
     acknowledged?: boolean
     bulk?: boolean
     // For raw data preview
     port?: number
     rawData?: string
+    // For settings sync
+    audioEnabled?: string
+    muteEndTime?: string
+    temperatureEnabled?: string
+    upsEnabled?: string
+    gateEnabled?: string
   }
   timestamp: string
 }
@@ -242,5 +263,5 @@ export function isEquipmentConfig(config: SystemConfig): config is EquipmentConf
 }
 
 export function isMetricsConfig(config: SystemConfig): config is MetricsConfig {
-  return 'delimiter' in config && 'displayItems' in config
+  return ('delimiter' in config || 'customCode' in config) && 'displayItems' in config
 }

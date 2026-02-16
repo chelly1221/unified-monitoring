@@ -2,6 +2,7 @@
 
 import { useMemo } from 'react'
 import type { PrismaAlarm } from '@/types'
+import { useCompactScreen } from '@/hooks/useCompactScreen'
 
 type SensorAlarmType = 'high-temp' | 'low-temp' | 'dry' | 'humid'
 
@@ -27,8 +28,10 @@ interface SensorAlarmEffectsProps {
 }
 
 export function SensorAlarmEffects({ alarms }: SensorAlarmEffectsProps) {
-  const { primaryType, activeTypes, primaryAlarm } = useMemo(() => {
+  const compact = useCompactScreen()
+  const { primaryType, activeTypes, primaryAlarm, typeToName } = useMemo(() => {
     const types = new Set<SensorAlarmType>()
+    const nameMap = new Map<SensorAlarmType, string>()
     let firstAlarm: PrismaAlarm | null = null
     let firstType: SensorAlarmType | null = null
 
@@ -36,6 +39,9 @@ export function SensorAlarmEffects({ alarms }: SensorAlarmEffectsProps) {
       const t = detectSensorAlarmType(alarm.message)
       if (t) {
         types.add(t)
+        if (!nameMap.has(t)) {
+          nameMap.set(t, alarm.system?.name ?? '온습도')
+        }
         if (!firstAlarm) {
           firstAlarm = alarm
           firstType = t
@@ -49,82 +55,87 @@ export function SensorAlarmEffects({ alarms }: SensorAlarmEffectsProps) {
       primaryType: primary,
       activeTypes: Array.from(types),
       primaryAlarm: firstAlarm,
+      typeToName: nameMap,
     }
   }, [alarms])
 
   if (!primaryType || !primaryAlarm) return null
 
+  const multi = activeTypes.length > 1
+  // 1개: 단일, 2~3개: 세로 분할, 4개: 2×2
+  const gridClass = activeTypes.length === 1 ? 'grid-cols-1'
+    : activeTypes.length <= 3 ? 'grid-cols-1'
+    : 'grid-cols-2'
+
+  // systemName is now per-type via typeToName
+
   return (
-    <div className="relative flex h-full w-full overflow-hidden rounded-lg">
-      {/* Effect layer */}
-      {primaryType === 'high-temp' && <HighTempEffect />}
-      {primaryType === 'low-temp' && <LowTempEffect />}
-      {primaryType === 'dry' && <DryEffect />}
-      {primaryType === 'humid' && <HumidEffect />}
+    <div className={`grid h-full w-full gap-2 ${gridClass}`}>
+      {activeTypes.map(t => (
+        <div key={t} className="relative flex h-full w-full overflow-hidden rounded-lg">
+          {/* 타입별 Effect 배경 */}
+          {t === 'high-temp' && <HighTempEffect compact={compact} />}
+          {t === 'low-temp' && <LowTempEffect compact={compact} />}
+          {t === 'dry' && <DryEffect compact={compact} />}
+          {t === 'humid' && <HumidEffect compact={compact} />}
 
-      {/* Alarm info overlay */}
-      <div className="absolute inset-0 z-20 flex flex-col items-center justify-center">
-        <div className="rounded-xl bg-black/50 px-10 py-6 backdrop-blur-sm border border-white/10">
-          <p className="text-center text-xl font-medium text-white/80">
-            {primaryAlarm.system?.name ?? '온습도'}
-          </p>
-          <p className="mt-2 text-center text-4xl font-bold text-white">
-            {LABEL_MAP[primaryType]} 경고
-          </p>
-          <p className="mt-2 text-center text-lg text-white/60">
-            {primaryAlarm.message}
-          </p>
-        </div>
-
-        {/* Multiple condition badges */}
-        {activeTypes.length > 1 && (
-          <div className="mt-4 flex gap-2">
-            {activeTypes.map(t => (
-              <span
-                key={t}
-                className={`rounded-full px-3 py-1 text-sm font-medium ${
-                  t === primaryType
-                    ? 'bg-white/20 text-white'
-                    : 'bg-white/10 text-white/60'
-                }`}
-              >
-                {LABEL_MAP[t]}
-              </span>
-            ))}
+          {/* 오버레이 */}
+          <div className="absolute inset-0 z-20 flex flex-col items-center justify-center">
+            <div className={`rounded-2xl bg-black/50 backdrop-blur-sm border border-white/10 ${
+              compact
+                ? multi ? 'px-8 py-6' : 'px-12 py-10'
+                : multi ? 'px-14 py-10' : 'px-16 py-16'
+            }`}>
+              <p className={`text-center font-medium text-white/80 ${
+                compact
+                  ? multi ? 'text-3xl' : 'text-4xl'
+                  : multi ? 'text-4xl' : 'text-5xl'
+              }`}>
+                {typeToName.get(t) ?? '온습도'}
+              </p>
+              <p className={`mt-2 text-center font-bold text-white ${
+                compact
+                  ? multi ? 'text-5xl' : 'text-6xl'
+                  : multi ? 'text-7xl' : 'text-8xl'
+              }`}>
+                {LABEL_MAP[t]} 경고
+              </p>
+            </div>
           </div>
-        )}
-      </div>
+        </div>
+      ))}
     </div>
   )
 }
 
-/** Detect sensor alarms from alarm list */
+/** Detect sensor alarms from alarm list (only from sensor-type systems) */
 export function getSensorAlarms(alarms: PrismaAlarm[]): PrismaAlarm[] {
   return alarms.filter(a =>
-    detectSensorAlarmType(a.message) !== null ||
-    a.system?.type === 'sensor'
+    a.system?.type === 'sensor' && detectSensorAlarmType(a.message) !== null
   )
 }
 
 /* ===== Effect Sub-Components ===== */
 
-function HighTempEffect() {
+function HighTempEffect({ compact }: { compact: boolean }) {
+  const flameCount = compact ? 10 : 25
+  const emberCount = compact ? 5 : 15
   const flames = useMemo(() =>
-    Array.from({ length: 25 }, (_, i) => ({
-      left: `${(i / 25) * 100}%`,
+    Array.from({ length: flameCount }, (_, i) => ({
+      left: `${(i / flameCount) * 100}%`,
       size: 8 + Math.random() * 16,
       duration: 2 + Math.random() * 3,
       delay: Math.random() * 4,
       opacity: 0.5 + Math.random() * 0.5,
-    })), []
+    })), [flameCount]
   )
   const embers = useMemo(() =>
-    Array.from({ length: 15 }, (_, i) => ({
+    Array.from({ length: emberCount }, (_, i) => ({
       left: `${10 + Math.random() * 80}%`,
       size: 3 + Math.random() * 5,
       duration: 3 + Math.random() * 4,
       delay: Math.random() * 5,
-    })), []
+    })), [emberCount]
   )
 
   return (
@@ -169,16 +180,17 @@ function HighTempEffect() {
   )
 }
 
-function LowTempEffect() {
+function LowTempEffect({ compact }: { compact: boolean }) {
+  const snowCount = compact ? 12 : 35
   const snowflakes = useMemo(() =>
-    Array.from({ length: 35 }, (_, i) => ({
-      left: `${(i / 35) * 100}%`,
+    Array.from({ length: snowCount }, (_, i) => ({
+      left: `${(i / snowCount) * 100}%`,
       size: 4 + Math.random() * 8,
       duration: 4 + Math.random() * 6,
       delay: Math.random() * 8,
       drift: -30 + Math.random() * 60,
       opacity: 0.4 + Math.random() * 0.6,
-    })), []
+    })), [snowCount]
   )
 
   return (
@@ -223,9 +235,11 @@ function LowTempEffect() {
   )
 }
 
-function DryEffect() {
+function DryEffect({ compact }: { compact: boolean }) {
+  const dustCount = compact ? 8 : 20
+  const heatLineCount = compact ? 4 : 8
   const dust = useMemo(() =>
-    Array.from({ length: 20 }, (_, i) => ({
+    Array.from({ length: dustCount }, (_, i) => ({
       left: `${10 + Math.random() * 80}%`,
       top: `${10 + Math.random() * 80}%`,
       size: 3 + Math.random() * 6,
@@ -235,15 +249,15 @@ function DryEffect() {
       dy: -30 + Math.random() * 60,
       dx2: -30 + Math.random() * 60,
       dy2: -20 + Math.random() * 40,
-    })), []
+    })), [dustCount]
   )
   const heatLines = useMemo(() =>
-    Array.from({ length: 8 }, (_, i) => ({
-      left: `${10 + (i / 8) * 80}%`,
+    Array.from({ length: heatLineCount }, (_, i) => ({
+      left: `${10 + (i / heatLineCount) * 80}%`,
       height: 40 + Math.random() * 60,
       duration: 3 + Math.random() * 3,
       delay: Math.random() * 4,
-    })), []
+    })), [heatLineCount]
   )
 
   return (
@@ -305,25 +319,27 @@ function DryEffect() {
   )
 }
 
-function HumidEffect() {
+function HumidEffect({ compact }: { compact: boolean }) {
+  const raindropCount = compact ? 15 : 50
+  const rippleCount = compact ? 4 : 8
   const raindrops = useMemo(() =>
-    Array.from({ length: 50 }, (_, i) => ({
-      left: `${(i / 50) * 100}%`,
+    Array.from({ length: raindropCount }, (_, i) => ({
+      left: `${(i / raindropCount) * 100}%`,
       width: 1 + Math.random() * 1.5,
       height: 15 + Math.random() * 25,
       duration: 0.6 + Math.random() * 0.8,
       delay: Math.random() * 2,
       drift: -8 + Math.random() * 4,
       opacity: 0.3 + Math.random() * 0.4,
-    })), []
+    })), [raindropCount]
   )
   const ripples = useMemo(() =>
-    Array.from({ length: 8 }, (_, i) => ({
+    Array.from({ length: rippleCount }, (_, i) => ({
       left: `${10 + Math.random() * 80}%`,
       duration: 2 + Math.random() * 2,
       delay: Math.random() * 4,
       size: 10 + Math.random() * 20,
-    })), []
+    })), [rippleCount]
   )
 
   return (

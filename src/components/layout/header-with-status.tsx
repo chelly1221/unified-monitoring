@@ -23,15 +23,8 @@ const MUTE_DURATIONS = [
   { label: '5시간', minutes: 300 },
 ]
 
-interface HeaderWithStatusProps {
-  audioMuted?: boolean
-  onMuteChange?: (muted: boolean) => void
-}
-
-export function HeaderWithStatus({ audioMuted = false, onMuteChange }: HeaderWithStatusProps) {
-  const { systems } = useRealtime()
-  const [audioEnabled, setAudioEnabled] = useState(true)
-  const [muteEndTime, setMuteEndTime] = useState<number | null>(null)
+export function HeaderWithStatus() {
+  const { systems, audioMuted, muteEndTime, setAudioMute, featureFlags } = useRealtime()
   const [remainingTime, setRemainingTime] = useState<string>('')
   const [gateLoading, setGateLoading] = useState(false)
   const [isFullscreen, setIsFullscreen] = useState(false)
@@ -46,89 +39,64 @@ export function HeaderWithStatus({ audioMuted = false, onMuteChange }: HeaderWit
     return () => document.removeEventListener('fullscreenchange', handleFullscreenChange)
   }, [])
 
-  const updateAudioSetting = useCallback(async (enabled: boolean, clearMuteEndTime = false) => {
-    try {
-      const payload: Record<string, string> = { audioEnabled: String(enabled) }
-      if (clearMuteEndTime) {
-        payload.muteEndTime = ''
-      }
-      await fetch('/api/settings', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      })
-    } catch {
-      // ignore
-    }
-  }, [])
-
-  const unmute = useCallback(() => {
-    setAudioEnabled(true)
-    setMuteEndTime(null)
+  const unmute = useCallback(async () => {
+    setAudioMute(false)
     setRemainingTime('')
     if (timerRef.current) {
       clearInterval(timerRef.current)
       timerRef.current = null
     }
-    onMuteChange?.(false)
-    updateAudioSetting(true, true)
-  }, [updateAudioSetting, onMuteChange])
-
-  useEffect(() => {
-    fetch('/api/settings')
-      .then((res) => res.json())
-      .then((settings) => {
-        const enabled = settings.audioEnabled !== 'false'
-        setAudioEnabled(enabled)
-        if (settings.muteEndTime) {
-          const endTime = parseInt(settings.muteEndTime)
-          if (endTime > Date.now()) {
-            setMuteEndTime(endTime)
-            setAudioEnabled(false)
-            onMuteChange?.(true)
-          } else {
-            updateAudioSetting(true, true)
-          }
-        } else if (!enabled) {
-          onMuteChange?.(true)
-        }
+    try {
+      await fetch('/api/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ audioEnabled: 'true', muteEndTime: '' }),
       })
-      .catch(() => {})
-  }, [updateAudioSetting, onMuteChange])
+    } catch {
+      // ignore
+    }
+  }, [setAudioMute])
 
+  // Countdown timer derived from context muteEndTime
   useEffect(() => {
-    if (muteEndTime) {
-      const updateRemaining = () => {
-        const diff = muteEndTime - Date.now()
-        if (diff <= 0) {
-          unmute()
+    if (timerRef.current) {
+      clearInterval(timerRef.current)
+      timerRef.current = null
+    }
+
+    if (!audioMuted || !muteEndTime) {
+      setRemainingTime('')
+      return
+    }
+
+    const updateRemaining = () => {
+      const diff = muteEndTime - Date.now()
+      if (diff <= 0) {
+        unmute()
+      } else {
+        const mins = Math.floor(diff / 60000)
+        const secs = Math.floor((diff % 60000) / 1000)
+        if (mins >= 60) {
+          const hrs = Math.floor(mins / 60)
+          const remainMins = mins % 60
+          setRemainingTime(`${hrs}시간 ${remainMins}분`)
+        } else if (mins > 0) {
+          setRemainingTime(`${mins}분 ${secs}초`)
         } else {
-          const mins = Math.floor(diff / 60000)
-          const secs = Math.floor((diff % 60000) / 1000)
-          if (mins >= 60) {
-            const hrs = Math.floor(mins / 60)
-            const remainMins = mins % 60
-            setRemainingTime(`${hrs}시간 ${remainMins}분`)
-          } else if (mins > 0) {
-            setRemainingTime(`${mins}분 ${secs}초`)
-          } else {
-            setRemainingTime(`${secs}초`)
-          }
+          setRemainingTime(`${secs}초`)
         }
-      }
-      updateRemaining()
-      timerRef.current = setInterval(updateRemaining, 1000)
-      return () => {
-        if (timerRef.current) clearInterval(timerRef.current)
       }
     }
-  }, [muteEndTime, unmute])
+    updateRemaining()
+    timerRef.current = setInterval(updateRemaining, 1000)
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current)
+    }
+  }, [audioMuted, muteEndTime, unmute])
 
   const handleMuteDuration = async (minutes: number) => {
     const endTime = Date.now() + minutes * 60 * 1000
-    setMuteEndTime(endTime)
-    setAudioEnabled(false)
-    onMuteChange?.(true)
+    setAudioMute(true, endTime)
     try {
       await fetch('/api/settings', {
         method: 'PUT',
@@ -168,13 +136,15 @@ export function HeaderWithStatus({ audioMuted = false, onMuteChange }: HeaderWit
     }
   }
 
-  const enabledSystems = systems?.filter(s => s.isEnabled !== false) ?? []
+  const allSystems = systems ?? []
+  const enabledSystems = allSystems.filter(s => s.isEnabled !== false)
+  const disabledSystems = allSystems.filter(s => s.isEnabled === false)
 
   return (
     <header className="sticky top-0 z-50 flex h-14 items-center justify-between border-b border-border bg-background px-4">
         <div className="flex items-center gap-4">
           <h1 className="text-lg font-bold text-foreground">통합알람감시체계</h1>
-          {enabledSystems.length > 0 && (
+          {allSystems.length > 0 && (
             <div className="flex items-center gap-3 text-sm">
               <div className="flex items-center gap-1">
                 <span className="h-2 w-2 rounded-full bg-[#4ade80]" />
@@ -185,7 +155,7 @@ export function HeaderWithStatus({ audioMuted = false, onMuteChange }: HeaderWit
               <div className="flex items-center gap-1">
                 <span className="h-2 w-2 rounded-full bg-[#facc15]" />
                 <span className="tabular-nums font-medium text-[#facc15]">
-                  {enabledSystems.filter((s) => s.status === 'warning').length}
+                  {enabledSystems.filter((s) => s.status === 'warning' || s.status === 'offline').length}
                 </span>
               </div>
               <div className="flex items-center gap-1">
@@ -197,7 +167,7 @@ export function HeaderWithStatus({ audioMuted = false, onMuteChange }: HeaderWit
               <div className="flex items-center gap-1">
                 <span className="h-2 w-2 rounded-full bg-[#a1a1aa]" />
                 <span className="tabular-nums font-medium text-[#a1a1aa]">
-                  {enabledSystems.filter((s) => s.status === 'offline').length}
+                  {disabledSystems.length}
                 </span>
               </div>
             </div>
@@ -208,7 +178,7 @@ export function HeaderWithStatus({ audioMuted = false, onMuteChange }: HeaderWit
         </div>
 
       <div className="flex items-center gap-4">
-        {audioEnabled ? (
+        {!audioMuted ? (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="ghost" size="icon">
@@ -243,23 +213,25 @@ export function HeaderWithStatus({ audioMuted = false, onMuteChange }: HeaderWit
           </Button>
         )}
 
-        <Button
-          variant="ghost"
-          size="icon"
-          className="group"
-          onClick={handleGateOpen}
-          disabled={gateLoading}
-          title="게이트 열기"
-        >
-          {gateLoading ? (
-            <Loader2 className="h-5 w-5 animate-spin" />
-          ) : (
-            <>
-              <DoorClosed className="h-5 w-5 group-hover:hidden" />
-              <DoorOpen className="h-5 w-5 hidden group-hover:block" />
-            </>
-          )}
-        </Button>
+        {featureFlags.gateEnabled && (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="group"
+            onClick={handleGateOpen}
+            disabled={gateLoading}
+            title="게이트 열기"
+          >
+            {gateLoading ? (
+              <Loader2 className="h-5 w-5 animate-spin" />
+            ) : (
+              <>
+                <DoorClosed className="h-5 w-5 group-hover:hidden" />
+                <DoorOpen className="h-5 w-5 hidden group-hover:block" />
+              </>
+            )}
+          </Button>
+        )}
 
         <Link href="/settings">
           <Button variant="ghost" size="icon">

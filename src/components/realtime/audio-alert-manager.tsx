@@ -5,12 +5,8 @@ import { useRealtime } from './realtime-provider'
 import { evaluateSensorStatus } from '@/lib/threshold-evaluator'
 import type { AudioConfig, MetricsConfig } from '@/types'
 
-interface AudioAlertManagerProps {
-  audioMuted?: boolean
-}
-
-export function AudioAlertManager({ audioMuted = false }: AudioAlertManagerProps) {
-  const { alarms, systems, metrics } = useRealtime()
+export function AudioAlertManager() {
+  const { alarms, systems, metrics, audioMuted } = useRealtime()
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const currentFileRef = useRef<string | null>(null)
 
@@ -38,14 +34,13 @@ export function AudioAlertManager({ audioMuted = false }: AudioAlertManagerProps
         const system = systems.find((s) => s.id === alarm.systemId)
         if (!system) continue
 
-        // Sensor systems: use per-item audio based on current metric values
-        if (system.type === 'sensor' && system.config) {
+        // Sensor & UPS systems: check per-item audio based on current metric values
+        if ((system.type === 'sensor' || system.type === 'ups') && system.config) {
           try {
             const metricsConfig = JSON.parse(system.config) as MetricsConfig
             if (metricsConfig.displayItems) {
               for (const item of metricsConfig.displayItems) {
                 if (!item.audioConfig || item.audioConfig.type !== 'file' || !item.audioConfig.fileName) continue
-                if (!item.conditions) continue
 
                 // Find matching metric for this display item
                 const metric = metrics.find(
@@ -54,8 +49,16 @@ export function AudioAlertManager({ audioMuted = false }: AudioAlertManagerProps
                 if (!metric) continue
 
                 // Check if this specific metric is currently in critical state
-                const status = evaluateSensorStatus(metric.value, item.conditions)
-                if (status === 'critical') {
+                let isCritical = false
+                if (item.conditions) {
+                  isCritical = evaluateSensorStatus(metric.value, item.conditions) === 'critical'
+                } else if (item.critical != null && metric.value >= item.critical) {
+                  isCritical = true
+                } else if (item.warning != null && metric.value <= item.warning) {
+                  isCritical = true
+                }
+
+                if (isCritical) {
                   targetFile = item.audioConfig.fileName
                   break
                 }
@@ -65,10 +68,12 @@ export function AudioAlertManager({ audioMuted = false }: AudioAlertManagerProps
             // Invalid config, skip
           }
           if (targetFile) break
-          continue
+          // Sensor: no system-level fallback
+          if (system.type === 'sensor') continue
+          // UPS: fall through to system-level audioConfig as fallback
         }
 
-        // Non-sensor systems: use system-level audioConfig
+        // Non-sensor systems (+ UPS fallback): use system-level audioConfig
         if (!system.audioConfig) continue
         try {
           const config = JSON.parse(system.audioConfig) as AudioConfig
@@ -82,25 +87,26 @@ export function AudioAlertManager({ audioMuted = false }: AudioAlertManagerProps
       }
 
       if (targetFile) {
-        // Already playing this file — do nothing
-        if (currentFileRef.current === targetFile && audioRef.current && !audioRef.current.paused) {
+        // Already playing (or starting) this file — skip
+        if (currentFileRef.current === targetFile && audioRef.current) {
           return
         }
 
-        // Different file or not playing — stop current and start new
+        // Stop any currently playing audio first
         if (audioRef.current) {
           audioRef.current.pause()
           audioRef.current.src = ''
           audioRef.current = null
         }
 
+        // Mark intent before async play to prevent duplicates
+        currentFileRef.current = targetFile
         const audio = new Audio(`/api/audio/${targetFile}`)
         audio.loop = true
         audio.play().catch(() => {
           // Browser may block autoplay without user interaction — silently ignore
         })
         audioRef.current = audio
-        currentFileRef.current = targetFile
       } else {
         // Active critical alarms exist but none have audio configured — stop if playing
         if (audioRef.current) {

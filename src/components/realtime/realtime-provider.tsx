@@ -9,6 +9,26 @@ import type {
   WebSocketMessage,
 } from '@/types'
 
+interface FeatureFlags {
+  temperatureEnabled: boolean
+  upsEnabled: boolean
+  gateEnabled: boolean
+}
+
+const DEFAULT_FEATURE_FLAGS: FeatureFlags = {
+  temperatureEnabled: true,
+  upsEnabled: true,
+  gateEnabled: true,
+}
+
+function parseFeatureFlags(settings: Record<string, string>): FeatureFlags {
+  return {
+    temperatureEnabled: settings.temperatureEnabled !== 'false',
+    upsEnabled: settings.upsEnabled !== 'false',
+    gateEnabled: settings.gateEnabled !== 'false',
+  }
+}
+
 interface RealtimeContextValue {
   systems: PrismaSystem[]
   metrics: PrismaMetric[]
@@ -16,6 +36,10 @@ interface RealtimeContextValue {
   connected: boolean
   reconnecting: boolean
   lastUpdate: Date | null
+  audioMuted: boolean
+  muteEndTime: number | null
+  featureFlags: FeatureFlags
+  setAudioMute: (muted: boolean, endTime?: number | null) => void
   updateSystem: (systemId: string, updates: Partial<PrismaSystem>) => void
   updateMetric: (metricId: string, updates: Partial<PrismaMetric>) => void
   addAlarm: (alarm: PrismaAlarm) => void
@@ -37,6 +61,9 @@ export function RealtimeProvider({
   const [systems, setSystems] = useState<PrismaSystem[]>(initialSystems)
   const [alarms, setAlarms] = useState<PrismaAlarm[]>(initialAlarms)
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null)
+  const [audioMuted, setAudioMuted] = useState(false)
+  const [muteEndTime, setMuteEndTime] = useState<number | null>(null)
+  const [featureFlags, setFeatureFlags] = useState<FeatureFlags>(DEFAULT_FEATURE_FLAGS)
 
   // Ref to avoid handleMessage depending on systems state (prevents recreation on every metric update)
   const systemsRef = useRef<PrismaSystem[]>(initialSystems)
@@ -75,6 +102,29 @@ export function RealtimeProvider({
     setLastUpdate(new Date())
   }, [])
 
+  const setAudioMute = useCallback((muted: boolean, endTime?: number | null) => {
+    setAudioMuted(muted)
+    setMuteEndTime(endTime ?? null)
+  }, [])
+
+  // Fetch initial audio mute state and feature flags from settings
+  useEffect(() => {
+    fetch('/api/settings')
+      .then((res) => res.json())
+      .then((settings) => {
+        const enabled = settings.audioEnabled !== 'false'
+        if (!enabled) {
+          const end = settings.muteEndTime ? parseInt(settings.muteEndTime) : 0
+          if (!end || end > Date.now()) {
+            setAudioMuted(true)
+            setMuteEndTime(end || null)
+          }
+        }
+        setFeatureFlags(parseFeatureFlags(settings))
+      })
+      .catch(() => {})
+  }, [])
+
   const handleMessage = useCallback(
     (message: WebSocketMessage) => {
       const { type, data } = message
@@ -84,6 +134,7 @@ export function RealtimeProvider({
           if (data.metricId && data.value !== undefined) {
             updateMetric(data.metricId, {
               value: data.value,
+              textValue: data.textValue ?? null,
               trend: data.trend ?? null,
               updatedAt: new Date(),
             })
@@ -141,6 +192,7 @@ export function RealtimeProvider({
               systemId: data.systemId,
               severity: data.severity,
               message: data.message,
+              value: data.alarmValue ?? null,
               acknowledged: data.acknowledged ?? false,
               acknowledgedAt: null,
               acknowledgedBy: null,
@@ -164,11 +216,43 @@ export function RealtimeProvider({
 
         case 'alarm-resolved':
           if (data.systemId) {
-            // Remove unresolved alarms for this system
-            setAlarms((prev) =>
-              prev.filter((a) => a.systemId !== data.systemId || a.resolvedAt !== null)
-            )
+            if (data.alarmIds && Array.isArray(data.alarmIds)) {
+              // Partial resolution: mark specific alarms as resolved
+              const ids = new Set(data.alarmIds as string[])
+              setAlarms((prev) =>
+                prev.map((a) => ids.has(a.id)
+                  ? { ...a, resolvedAt: new Date() }
+                  : a
+                )
+              )
+            } else {
+              // Full resolution: remove all unresolved for system
+              setAlarms((prev) =>
+                prev.filter((a) => a.systemId !== data.systemId || a.resolvedAt !== null)
+              )
+            }
             setLastUpdate(new Date())
+          }
+          break
+
+        case 'settings':
+          if (data.audioEnabled !== undefined) {
+            const enabled = data.audioEnabled !== 'false'
+            const end = data.muteEndTime ? parseInt(data.muteEndTime) : 0
+            if (enabled) {
+              setAudioMuted(false)
+              setMuteEndTime(null)
+            } else {
+              setAudioMuted(true)
+              setMuteEndTime(end || null)
+            }
+          }
+          if (data.temperatureEnabled !== undefined || data.upsEnabled !== undefined || data.gateEnabled !== undefined) {
+            setFeatureFlags((prev) => ({
+              temperatureEnabled: data.temperatureEnabled !== undefined ? data.temperatureEnabled !== 'false' : prev.temperatureEnabled,
+              upsEnabled: data.upsEnabled !== undefined ? data.upsEnabled !== 'false' : prev.upsEnabled,
+              gateEnabled: data.gateEnabled !== undefined ? data.gateEnabled !== 'false' : prev.gateEnabled,
+            }))
           }
           break
 
@@ -182,9 +266,10 @@ export function RealtimeProvider({
   // WebSocket 재연결 시 전체 상태 동기화
   const syncState = useCallback(async () => {
     try {
-      const [systemsRes, alarmsRes] = await Promise.all([
+      const [systemsRes, alarmsRes, settingsRes] = await Promise.all([
         fetch('/api/systems'),
         fetch('/api/alarms?acknowledged=false&resolved=false&limit=100'),
+        fetch('/api/settings'),
       ])
       if (systemsRes.ok) {
         const freshSystems = await systemsRes.json()
@@ -193,6 +278,25 @@ export function RealtimeProvider({
       if (alarmsRes.ok) {
         const freshAlarms = await alarmsRes.json()
         setAlarms(freshAlarms)
+      }
+      if (settingsRes.ok) {
+        const settings = await settingsRes.json()
+        const enabled = settings.audioEnabled !== 'false'
+        if (enabled) {
+          setAudioMuted(false)
+          setMuteEndTime(null)
+        } else {
+          const end = settings.muteEndTime ? parseInt(settings.muteEndTime) : 0
+          if (end && end <= Date.now()) {
+            // Mute expired, re-enable
+            setAudioMuted(false)
+            setMuteEndTime(null)
+          } else {
+            setAudioMuted(true)
+            setMuteEndTime(end || null)
+          }
+        }
+        setFeatureFlags(parseFeatureFlags(settings))
       }
       setLastUpdate(new Date())
     } catch (e) {
@@ -240,6 +344,10 @@ export function RealtimeProvider({
         connected,
         reconnecting,
         lastUpdate,
+        audioMuted,
+        muteEndTime,
+        featureFlags,
+        setAudioMute,
         updateSystem,
         updateMetric,
         addAlarm,

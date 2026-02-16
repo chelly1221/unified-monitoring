@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import vm from 'vm'
 import { prisma } from '@/lib/db'
 import { syncMetricsFromConfig } from '@/lib/sync-metrics'
 import type { MetricsConfig } from '@/types'
@@ -54,6 +55,20 @@ export async function POST(request: Request) {
         { error: 'Invalid protocol. Must be udp or tcp' },
         { status: 400 }
       )
+    }
+
+    // Validate customCode syntax if present
+    if (config?.customCode?.trim()) {
+      try {
+        const wrapped = `(function(raw) { ${config.customCode} })(rawInput)`
+        new vm.Script(wrapped)
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        return NextResponse.json(
+          { error: `커스텀 코드 구문 오류: ${msg}` },
+          { status: 400 }
+        )
+      }
     }
 
     const system = await prisma.system.create({

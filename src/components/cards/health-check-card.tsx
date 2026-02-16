@@ -23,6 +23,7 @@ function getStatusLeftBorder(status: string, isEnabled: boolean): string {
     case 'critical':
       return 'border-l-[#f87171]'
     case 'offline':
+      return 'border-l-[#facc15]'
     default:
       return 'border-l-[#a1a1aa]'
   }
@@ -39,6 +40,7 @@ function getStatusBgTint(status: string, isEnabled: boolean): string {
     case 'critical':
       return '!bg-[#ef4444]'      // bright red
     case 'offline':
+      return '!bg-[#eab308]'      // yellow (warning)
     default:
       return '!bg-[#6b7280]'      // light gray
   }
@@ -53,10 +55,11 @@ function getStatusBadge(status: string, isEnabled: boolean): { text: string; cla
     case 'normal':
       return { text: '정상', className: 'bg-green-900/80 text-green-100' }
     case 'warning':
-      return { text: '주의', className: 'bg-yellow-900/80 text-yellow-100' }
+      return { text: '오프라인', className: 'bg-yellow-900/80 text-yellow-100' }
     case 'critical':
       return { text: '경고', className: 'bg-red-900/80 text-red-100' }
     case 'offline':
+      return { text: '오프라인', className: 'bg-yellow-900/80 text-yellow-100' }
     default:
       return { text: '오프라인', className: 'bg-gray-900/80 text-gray-100' }
   }
@@ -91,7 +94,7 @@ export function HealthCheckCard({
             isEnabled && status === 'normal' && 'text-green-900',
             isEnabled && status === 'warning' && 'text-yellow-900',
             isEnabled && status === 'critical' && 'text-white',
-            isEnabled && status === 'offline' && 'text-white'
+            isEnabled && status === 'offline' && 'text-yellow-900'
           )}>
             {name}
           </p>

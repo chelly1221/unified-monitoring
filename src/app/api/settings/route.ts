@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/db'
-import { notifySirenSync } from '@/lib/ws-notify'
+import { notifySirenSync, notifyAudioSettingsChanged } from '@/lib/ws-notify'
 
 export async function GET() {
   try {
@@ -34,16 +34,20 @@ export async function PUT(request: Request) {
 
     await prisma.$transaction(updates)
 
-    // If audioEnabled or muteEndTime changed, sync siren state
-    if ('audioEnabled' in body || 'muteEndTime' in body) {
-      notifySirenSync()
-    }
-
     const settings = await prisma.setting.findMany()
     const settingsObj = settings.reduce((acc, setting) => {
       acc[setting.key] = setting.value
       return acc
     }, {} as Record<string, string>)
+
+    // If audioEnabled or muteEndTime changed, sync siren state and broadcast to all browsers
+    if ('audioEnabled' in body || 'muteEndTime' in body) {
+      notifySirenSync()
+      notifyAudioSettingsChanged(
+        settingsObj.audioEnabled ?? 'true',
+        settingsObj.muteEndTime ?? ''
+      )
+    }
 
     return NextResponse.json(settingsObj)
   } catch (error) {

@@ -7,11 +7,13 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Card, CardContent } from '@/components/ui/card'
 import { SensorAlarmEffects, getSensorAlarms } from './sensor-alarm-effects'
+import { useCompactScreen } from '@/hooks/useCompactScreen'
 
 export function RealtimeDashboard() {
   const router = useRouter()
   const { systems, alarms } = useRealtime()
   const [currentTime, setCurrentTime] = useState<Date>(new Date())
+  const compact = useCompactScreen()
   // Filter to only show 장비상태 (equipment) type systems
   const equipmentSystems = systems.filter(
     (s) => s.type === '장비상태' || s.type === 'equipment'
@@ -27,7 +29,7 @@ export function RealtimeDashboard() {
 
   // Find systems with problems (critical or warning status, only enabled systems)
   const problemSystems = equipmentSystems.filter(
-    (s) => s.isEnabled !== false && (s.status === 'critical' || s.status === 'warning')
+    (s) => s.isEnabled !== false && (s.status === 'critical' || s.status === 'warning' || s.status === 'offline')
   )
 
   // Find unacknowledged alarms
@@ -46,11 +48,23 @@ export function RealtimeDashboard() {
   // 3-way: equipment > sensor > normal
   const hasProblems = hasEquipmentProblems
 
+  // Compact sizing
+  const radarSize = compact ? 180 : 400
+  const orbitCount = compact ? 5 : 10
+  const orbitMaxRadius = compact ? 85 : 195
+  const orbitMinRadius = compact ? 25 : 50
+  const scannerSize = compact ? 160 : 350
+  const ringSize = compact ? 80 : 180
+  const ringCount = compact ? 3 : 7
+  const innerTriCount = compact ? 6 : 12
+  const innerTriRadius = compact ? 70 : 150
+  const zapCount = compact ? 4 : 8
+
   return (
     <>
     <div className="flex h-full gap-4">
       {/* LEFT: System status cards */}
-      <div className="flex w-48 flex-shrink-0 flex-col gap-1 overflow-y-auto">
+      <div className="hidden lg:flex w-48 flex-shrink-0 flex-col gap-1 overflow-y-auto">
         {equipmentSystems.map((system) => (
           <HealthCheckCard
             key={system.id}
@@ -76,24 +90,24 @@ export function RealtimeDashboard() {
         {hasProblems ? (
           <div className="flex h-full w-full flex-col">
             {/* Alert header - red blinking */}
-            <div className="animate-slow-pulse flex items-center justify-center gap-3 rounded-t-lg bg-red-600 py-4">
-              <AlertTriangle className="h-8 w-8 text-white" />
-              <span className="text-3xl font-bold text-white">장애발생</span>
-              <AlertTriangle className="h-8 w-8 text-white" />
+            <div className={`animate-slow-pulse flex items-center justify-center gap-3 rounded-t-lg bg-red-600 ${compact ? 'py-1.5' : 'py-4'}`}>
+              <AlertTriangle className={`${compact ? 'h-6 w-6' : 'h-8 w-8'} text-white`} />
+              <span className={`${compact ? 'text-xl' : 'text-3xl'} font-bold text-white`}>장애발생</span>
+              <AlertTriangle className={`${compact ? 'h-6 w-6' : 'h-8 w-8'} text-white`} />
             </div>
 
             {/* Problem list */}
-            <div className="flex flex-1 flex-col gap-3 overflow-y-auto p-6">
+            <div className={`flex flex-1 flex-col ${compact ? 'gap-2 p-3' : 'gap-3 p-6'} overflow-y-auto`}>
               {/* Critical systems first */}
               {problemSystems
                 .filter((s) => s.status === 'critical')
                 .map((system) => (
                   <div
                     key={system.id}
-                    className="rounded-lg border-2 border-red-500 bg-red-600/80 p-4"
+                    className={`rounded-lg border-2 border-red-500 bg-red-600/80 ${compact ? 'p-3' : 'p-4'}`}
                   >
                     <div className="flex justify-center">
-                      <span className="text-7xl font-bold text-white">
+                      <span className={`${compact ? 'text-6xl' : 'text-7xl'} font-bold text-white`}>
                         {system.name}
                       </span>
                     </div>
@@ -106,10 +120,10 @@ export function RealtimeDashboard() {
                 .map((system) => (
                   <div
                     key={system.id}
-                    className="rounded-lg border-2 border-yellow-300 bg-yellow-300 p-4"
+                    className={`rounded-lg border-2 border-yellow-300 bg-yellow-300 ${compact ? 'p-3' : 'p-4'}`}
                   >
                     <div className="flex justify-center">
-                      <span className="text-7xl font-bold text-black">
+                      <span className={`${compact ? 'text-6xl' : 'text-7xl'} font-bold text-black`}>
                         {system.name}
                       </span>
                     </div>
@@ -125,39 +139,23 @@ export function RealtimeDashboard() {
                 .map((alarm) => (
                   <div
                     key={alarm.id}
-                    className={`rounded-lg border p-4 ${
+                    className={`rounded-lg border-2 ${compact ? 'p-3' : 'p-4'} ${
                       alarm.severity === 'critical'
-                        ? 'border-red-500/50 bg-red-950/50'
-                        : 'border-yellow-500/50 bg-yellow-950/50'
+                        ? 'border-red-500 bg-red-600/80'
+                        : 'border-yellow-300 bg-yellow-300'
                     }`}
                   >
-                    <div className="flex items-center gap-3">
-                      <div
-                        className={`h-4 w-4 rounded-full ${
-                          alarm.severity === 'critical'
-                            ? 'animate-pulse bg-red-500'
-                            : 'bg-yellow-500'
-                        }`}
-                      />
+                    <div className="flex justify-center">
                       <span
-                        className={`text-xl font-semibold ${
+                        className={`${compact ? 'text-6xl' : 'text-7xl'} font-bold ${
                           alarm.severity === 'critical'
-                            ? 'text-red-400'
-                            : 'text-yellow-400'
+                            ? 'text-white'
+                            : 'text-black'
                         }`}
                       >
                         {alarm.system?.name ?? '시스템'}
                       </span>
                     </div>
-                    <p
-                      className={`mt-2 pl-7 text-lg ${
-                        alarm.severity === 'critical'
-                          ? 'text-red-300'
-                          : 'text-yellow-300'
-                      }`}
-                    >
-                      {alarm.message}
-                    </p>
                   </div>
                 ))}
 
@@ -166,14 +164,14 @@ export function RealtimeDashboard() {
                 <div className="relative flex-1 flex flex-col items-center justify-center overflow-hidden rounded-lg">
                   {/* Central alert icon with animations anchored to it */}
                   <div className="relative">
-                    {/* Expanding rings - more rings, faster */}
-                    {[0, 1, 2, 3, 4, 5, 6].map((i) => (
+                    {/* Expanding rings */}
+                    {Array.from({ length: ringCount }, (_, i) => (
                       <div
                         key={i}
                         className="absolute left-1/2 top-1/2 rounded-full"
                         style={{
-                          width: '180px',
-                          height: '180px',
+                          width: `${ringSize}px`,
+                          height: `${ringSize}px`,
                           borderWidth: '3px',
                           borderStyle: 'solid',
                           borderColor: problemSystems[0].status === 'critical'
@@ -187,8 +185,8 @@ export function RealtimeDashboard() {
 
                     {/* Rotating scanner beams - dual beams */}
                     <div
-                      className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[350px] h-[350px]"
-                      style={{ animation: 'alert-scan 3s linear infinite' }}
+                      className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2"
+                      style={{ width: `${scannerSize}px`, height: `${scannerSize}px`, animation: 'alert-scan 3s linear infinite' }}
                     >
                       <div
                         className="absolute top-1/2 left-1/2 w-1/2 h-1.5"
@@ -203,8 +201,8 @@ export function RealtimeDashboard() {
                       />
                     </div>
                     <div
-                      className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[350px] h-[350px]"
-                      style={{ animation: 'alert-scan 3s linear infinite reverse' }}
+                      className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2"
+                      style={{ width: `${scannerSize}px`, height: `${scannerSize}px`, animation: 'alert-scan 3s linear infinite reverse' }}
                     >
                       <div
                         className="absolute top-1/2 left-1/2 w-1/2 h-1"
@@ -219,13 +217,12 @@ export function RealtimeDashboard() {
                       />
                     </div>
 
-                    {/* Floating warning triangles - 12 triangles, larger */}
-                    {[...Array(12)].map((_, i) => {
-                      const angle = (i * 30) * (Math.PI / 180)
-                      const radius = 150
-                      const x = Math.cos(angle) * radius
-                      const y = Math.sin(angle) * radius
-                      const size = 20 + (i % 3) * 8
+                    {/* Floating warning triangles - inner ring */}
+                    {[...Array(innerTriCount)].map((_, i) => {
+                      const angle = (i * (360 / innerTriCount)) * (Math.PI / 180)
+                      const x = Math.cos(angle) * innerTriRadius
+                      const y = Math.sin(angle) * innerTriRadius
+                      const size = compact ? (12 + (i % 3) * 4) : (20 + (i % 3) * 8)
                       return (
                         <AlertTriangle
                           key={i}
@@ -245,8 +242,8 @@ export function RealtimeDashboard() {
                       )
                     })}
 
-                    {/* Outer ring of smaller triangles */}
-                    {[...Array(16)].map((_, i) => {
+                    {/* Outer ring of smaller triangles (hidden in compact) */}
+                    {!compact && [...Array(16)].map((_, i) => {
                       const angle = (i * 22.5 + 11.25) * (Math.PI / 180)
                       const radius = 200
                       const x = Math.cos(angle) * radius
@@ -272,7 +269,7 @@ export function RealtimeDashboard() {
 
                     {/* Siren icon circle - with intense glow animation */}
                     <div
-                      className={`relative z-10 rounded-full p-8 ${
+                      className={`relative z-10 rounded-full ${compact ? 'p-4' : 'p-8'} ${
                         problemSystems[0].status === 'critical' ? 'animate-danger-glow' : 'animate-warning-glow'
                       }`}
                       style={{
@@ -282,16 +279,16 @@ export function RealtimeDashboard() {
                       }}
                     >
                       {problemSystems[0].status === 'critical' ? (
-                        <Siren className="h-20 w-20 text-white animate-shake" />
+                        <Siren className={`${compact ? 'h-12 w-12' : 'h-20 w-20'} text-white animate-shake`} />
                       ) : (
-                        <AlertTriangle className="h-20 w-20 text-white animate-pulse" />
+                        <AlertTriangle className={`${compact ? 'h-12 w-12' : 'h-20 w-20'} text-white animate-pulse`} />
                       )}
                     </div>
                   </div>
 
                   {/* Status text below - with flicker effect */}
                   <p
-                    className={`mt-8 text-3xl font-bold animate-text-flicker ${
+                    className={`${compact ? 'mt-3 text-2xl' : 'mt-8 text-3xl'} font-bold animate-text-flicker ${
                       problemSystems[0].status === 'critical' ? 'text-red-400' : 'text-yellow-400'
                     }`}
                     style={{
@@ -303,91 +300,125 @@ export function RealtimeDashboard() {
                     {problemSystems[0].status === 'critical' ? '긴급 점검 필요' : '상태 확인 필요'}
                   </p>
 
-                  {/* Lightning bolts at corners - larger, more */}
-                  <Zap
-                    className={`absolute top-4 left-4 h-10 w-10 animate-warning-strobe ${
-                      problemSystems[0].status === 'critical' ? 'text-red-500' : 'text-yellow-500'
-                    }`}
-                  />
-                  <Zap
-                    className={`absolute top-4 left-16 h-7 w-7 animate-warning-strobe ${
-                      problemSystems[0].status === 'critical' ? 'text-red-500/70' : 'text-yellow-500/70'
-                    }`}
-                    style={{ animationDelay: '0.15s' }}
-                  />
-                  <Zap
-                    className={`absolute top-4 right-4 h-10 w-10 animate-warning-strobe ${
-                      problemSystems[0].status === 'critical' ? 'text-red-500' : 'text-yellow-500'
-                    }`}
-                    style={{ animationDelay: '0.3s' }}
-                  />
-                  <Zap
-                    className={`absolute top-4 right-16 h-7 w-7 animate-warning-strobe ${
-                      problemSystems[0].status === 'critical' ? 'text-red-500/70' : 'text-yellow-500/70'
-                    }`}
-                    style={{ animationDelay: '0.45s' }}
-                  />
-                  <Zap
-                    className={`absolute bottom-4 left-4 h-10 w-10 animate-warning-strobe ${
-                      problemSystems[0].status === 'critical' ? 'text-red-500' : 'text-yellow-500'
-                    }`}
-                    style={{ animationDelay: '0.6s' }}
-                  />
-                  <Zap
-                    className={`absolute bottom-4 left-16 h-7 w-7 animate-warning-strobe ${
-                      problemSystems[0].status === 'critical' ? 'text-red-500/70' : 'text-yellow-500/70'
-                    }`}
-                    style={{ animationDelay: '0.75s' }}
-                  />
-                  <Zap
-                    className={`absolute bottom-4 right-4 h-10 w-10 animate-warning-strobe ${
-                      problemSystems[0].status === 'critical' ? 'text-red-500' : 'text-yellow-500'
-                    }`}
-                    style={{ animationDelay: '0.9s' }}
-                  />
-                  <Zap
-                    className={`absolute bottom-4 right-16 h-7 w-7 animate-warning-strobe ${
-                      problemSystems[0].status === 'critical' ? 'text-red-500/70' : 'text-yellow-500/70'
-                    }`}
-                    style={{ animationDelay: '1.05s' }}
-                  />
+                  {/* Lightning bolts - reduced count in compact */}
+                  {compact ? (
+                    <>
+                      <Zap
+                        className={`absolute top-2 left-2 h-5 w-5 animate-warning-strobe ${
+                          problemSystems[0].status === 'critical' ? 'text-red-500' : 'text-yellow-500'
+                        }`}
+                      />
+                      <Zap
+                        className={`absolute top-2 right-2 h-5 w-5 animate-warning-strobe ${
+                          problemSystems[0].status === 'critical' ? 'text-red-500' : 'text-yellow-500'
+                        }`}
+                        style={{ animationDelay: '0.3s' }}
+                      />
+                      <Zap
+                        className={`absolute bottom-2 left-2 h-5 w-5 animate-warning-strobe ${
+                          problemSystems[0].status === 'critical' ? 'text-red-500' : 'text-yellow-500'
+                        }`}
+                        style={{ animationDelay: '0.6s' }}
+                      />
+                      <Zap
+                        className={`absolute bottom-2 right-2 h-5 w-5 animate-warning-strobe ${
+                          problemSystems[0].status === 'critical' ? 'text-red-500' : 'text-yellow-500'
+                        }`}
+                        style={{ animationDelay: '0.9s' }}
+                      />
+                    </>
+                  ) : (
+                    <>
+                      <Zap
+                        className={`absolute top-4 left-4 h-10 w-10 animate-warning-strobe ${
+                          problemSystems[0].status === 'critical' ? 'text-red-500' : 'text-yellow-500'
+                        }`}
+                      />
+                      <Zap
+                        className={`absolute top-4 left-16 h-7 w-7 animate-warning-strobe ${
+                          problemSystems[0].status === 'critical' ? 'text-red-500/70' : 'text-yellow-500/70'
+                        }`}
+                        style={{ animationDelay: '0.15s' }}
+                      />
+                      <Zap
+                        className={`absolute top-4 right-4 h-10 w-10 animate-warning-strobe ${
+                          problemSystems[0].status === 'critical' ? 'text-red-500' : 'text-yellow-500'
+                        }`}
+                        style={{ animationDelay: '0.3s' }}
+                      />
+                      <Zap
+                        className={`absolute top-4 right-16 h-7 w-7 animate-warning-strobe ${
+                          problemSystems[0].status === 'critical' ? 'text-red-500/70' : 'text-yellow-500/70'
+                        }`}
+                        style={{ animationDelay: '0.45s' }}
+                      />
+                      <Zap
+                        className={`absolute bottom-4 left-4 h-10 w-10 animate-warning-strobe ${
+                          problemSystems[0].status === 'critical' ? 'text-red-500' : 'text-yellow-500'
+                        }`}
+                        style={{ animationDelay: '0.6s' }}
+                      />
+                      <Zap
+                        className={`absolute bottom-4 left-16 h-7 w-7 animate-warning-strobe ${
+                          problemSystems[0].status === 'critical' ? 'text-red-500/70' : 'text-yellow-500/70'
+                        }`}
+                        style={{ animationDelay: '0.75s' }}
+                      />
+                      <Zap
+                        className={`absolute bottom-4 right-4 h-10 w-10 animate-warning-strobe ${
+                          problemSystems[0].status === 'critical' ? 'text-red-500' : 'text-yellow-500'
+                        }`}
+                        style={{ animationDelay: '0.9s' }}
+                      />
+                      <Zap
+                        className={`absolute bottom-4 right-16 h-7 w-7 animate-warning-strobe ${
+                          problemSystems[0].status === 'critical' ? 'text-red-500/70' : 'text-yellow-500/70'
+                        }`}
+                        style={{ animationDelay: '1.05s' }}
+                      />
+                    </>
+                  )}
 
-                  {/* Radio waves - larger with electric pulse */}
-                  <Radio
-                    className={`absolute left-6 top-1/2 -translate-y-1/2 h-8 w-8 animate-electric-pulse ${
-                      problemSystems[0].status === 'critical' ? 'text-red-500/70' : 'text-yellow-500/70'
-                    }`}
-                  />
-                  <Radio
-                    className={`absolute left-16 top-1/3 h-6 w-6 animate-electric-pulse ${
-                      problemSystems[0].status === 'critical' ? 'text-red-500/50' : 'text-yellow-500/50'
-                    }`}
-                    style={{ animationDelay: '0.2s' }}
-                  />
-                  <Radio
-                    className={`absolute left-16 top-2/3 h-6 w-6 animate-electric-pulse ${
-                      problemSystems[0].status === 'critical' ? 'text-red-500/50' : 'text-yellow-500/50'
-                    }`}
-                    style={{ animationDelay: '0.4s' }}
-                  />
-                  <Radio
-                    className={`absolute right-6 top-1/2 -translate-y-1/2 h-8 w-8 animate-electric-pulse ${
-                      problemSystems[0].status === 'critical' ? 'text-red-500/70' : 'text-yellow-500/70'
-                    }`}
-                    style={{ animationDelay: '0.5s' }}
-                  />
-                  <Radio
-                    className={`absolute right-16 top-1/3 h-6 w-6 animate-electric-pulse ${
-                      problemSystems[0].status === 'critical' ? 'text-red-500/50' : 'text-yellow-500/50'
-                    }`}
-                    style={{ animationDelay: '0.7s' }}
-                  />
-                  <Radio
-                    className={`absolute right-16 top-2/3 h-6 w-6 animate-electric-pulse ${
-                      problemSystems[0].status === 'critical' ? 'text-red-500/50' : 'text-yellow-500/50'
-                    }`}
-                    style={{ animationDelay: '0.9s' }}
-                  />
+                  {/* Radio waves (hidden in compact) */}
+                  {!compact && (
+                    <>
+                      <Radio
+                        className={`absolute left-6 top-1/2 -translate-y-1/2 h-8 w-8 animate-electric-pulse ${
+                          problemSystems[0].status === 'critical' ? 'text-red-500/70' : 'text-yellow-500/70'
+                        }`}
+                      />
+                      <Radio
+                        className={`absolute left-16 top-1/3 h-6 w-6 animate-electric-pulse ${
+                          problemSystems[0].status === 'critical' ? 'text-red-500/50' : 'text-yellow-500/50'
+                        }`}
+                        style={{ animationDelay: '0.2s' }}
+                      />
+                      <Radio
+                        className={`absolute left-16 top-2/3 h-6 w-6 animate-electric-pulse ${
+                          problemSystems[0].status === 'critical' ? 'text-red-500/50' : 'text-yellow-500/50'
+                        }`}
+                        style={{ animationDelay: '0.4s' }}
+                      />
+                      <Radio
+                        className={`absolute right-6 top-1/2 -translate-y-1/2 h-8 w-8 animate-electric-pulse ${
+                          problemSystems[0].status === 'critical' ? 'text-red-500/70' : 'text-yellow-500/70'
+                        }`}
+                        style={{ animationDelay: '0.5s' }}
+                      />
+                      <Radio
+                        className={`absolute right-16 top-1/3 h-6 w-6 animate-electric-pulse ${
+                          problemSystems[0].status === 'critical' ? 'text-red-500/50' : 'text-yellow-500/50'
+                        }`}
+                        style={{ animationDelay: '0.7s' }}
+                      />
+                      <Radio
+                        className={`absolute right-16 top-2/3 h-6 w-6 animate-electric-pulse ${
+                          problemSystems[0].status === 'critical' ? 'text-red-500/50' : 'text-yellow-500/50'
+                        }`}
+                        style={{ animationDelay: '0.9s' }}
+                      />
+                    </>
+                  )}
                 </div>
               )}
             </div>
@@ -399,24 +430,27 @@ export function RealtimeDashboard() {
           /* No problems - airport control tower theme */
           <div className="flex h-full w-full flex-col items-center justify-center">
             {/* Orbital system visualization */}
-            <div className="relative h-[400px] w-[400px]">
+            <div className="relative" style={{ height: `${radarSize}px`, width: `${radarSize}px` }}>
               {/* Radar background glow - brighter */}
               <div
-                className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 h-[400px] w-[400px] rounded-full"
+                className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full"
                 style={{
+                  width: `${radarSize}px`,
+                  height: `${radarSize}px`,
                   background: 'radial-gradient(circle, rgba(74,222,128,0.25) 0%, rgba(34,197,94,0.15) 40%, rgba(34,197,94,0.05) 60%, transparent 80%)',
                 }}
               />
 
-              {/* Orbiting dots - fixed 10 with different sizes */}
-              {Array.from({ length: 10 }, (_, index) => {
-                // Container is 400px, radius from 50 to 195px (full container usage)
-                const radius = 50 + Math.round(index * (145 / 9))  // 50 to 195px
-                const duration = 20 + (index * 4)  // 20s, 24s, 28s, ... 56s
-                // Golden angle distribution for scattered starting positions
+              {/* Orbiting dots */}
+              {Array.from({ length: orbitCount }, (_, index) => {
+                const radiusRange = orbitMaxRadius - orbitMinRadius
+                const radius = orbitMinRadius + Math.round(index * (radiusRange / Math.max(orbitCount - 1, 1)))
+                const duration = 20 + (index * 4)
                 const startAngle = (index * 137.508) % 360
                 const delay = (startAngle / 360) * duration
-                const size = 6 + (index % 5) * 3  // 6, 9, 12, 15, 18, 6, 9, 12, 15, 18
+                const size = compact
+                  ? (4 + (index % 3) * 2)   // 4, 6, 8 in compact
+                  : (6 + (index % 5) * 3)   // 6, 9, 12, 15, 18
 
                 return (
                   <div
@@ -444,17 +478,17 @@ export function RealtimeDashboard() {
 
               {/* Custom radar icon */}
               <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2">
-                <div className="relative h-24 w-24">
-                  {/* Radar circles - 3px thick with glow */}
+                <div className={`relative ${compact ? 'h-12 w-12' : 'h-24 w-24'}`}>
+                  {/* Radar circles */}
                   <div className="absolute inset-0 rounded-full border-[3px] border-green-400/50" style={{ boxShadow: '0 0 10px rgba(74,222,128,0.3), inset 0 0 10px rgba(74,222,128,0.1)' }} />
-                  <div className="absolute inset-3 rounded-full border-[3px] border-green-400/60" style={{ boxShadow: '0 0 8px rgba(74,222,128,0.4), inset 0 0 8px rgba(74,222,128,0.15)' }} />
-                  <div className="absolute inset-6 rounded-full border-[3px] border-green-400/70" style={{ boxShadow: '0 0 6px rgba(74,222,128,0.5), inset 0 0 6px rgba(74,222,128,0.2)' }} />
-                  {/* Radar cross lines - 3px thick */}
+                  <div className={`absolute ${compact ? 'inset-1.5' : 'inset-3'} rounded-full border-[3px] border-green-400/60`} style={{ boxShadow: '0 0 8px rgba(74,222,128,0.4), inset 0 0 8px rgba(74,222,128,0.15)' }} />
+                  <div className={`absolute ${compact ? 'inset-3' : 'inset-6'} rounded-full border-[3px] border-green-400/70`} style={{ boxShadow: '0 0 6px rgba(74,222,128,0.5), inset 0 0 6px rgba(74,222,128,0.2)' }} />
+                  {/* Radar cross lines */}
                   <div className="absolute left-1/2 top-0 bottom-0 w-[3px] -translate-x-1/2 bg-green-400/40" style={{ boxShadow: '0 0 6px rgba(74,222,128,0.5)' }} />
                   <div className="absolute top-1/2 left-0 right-0 h-[3px] -translate-y-1/2 bg-green-400/40" style={{ boxShadow: '0 0 6px rgba(74,222,128,0.5)' }} />
-                  {/* Center dot with check - bright steady */}
-                  <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 h-10 w-10 rounded-full bg-green-400 flex items-center justify-center" style={{ boxShadow: '0 0 20px rgba(134,239,172,1), 0 0 40px rgba(74,222,128,0.8), 0 0 60px rgba(34,197,94,0.4)' }}>
-                    <Check className="h-6 w-6 text-white" strokeWidth={3} />
+                  {/* Center dot with check */}
+                  <div className={`absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 ${compact ? 'h-5 w-5' : 'h-10 w-10'} rounded-full bg-green-400 flex items-center justify-center`} style={{ boxShadow: '0 0 20px rgba(134,239,172,1), 0 0 40px rgba(74,222,128,0.8), 0 0 60px rgba(34,197,94,0.4)' }}>
+                    <Check className={`${compact ? 'h-3 w-3' : 'h-6 w-6'} text-white`} strokeWidth={3} />
                   </div>
                 </div>
               </div>
@@ -462,31 +496,31 @@ export function RealtimeDashboard() {
 
             {/* Main text */}
             <h2
-              className="mt-4 text-4xl font-bold text-green-400"
+              className={`mt-4 ${compact ? 'text-xl' : 'text-4xl'} font-bold text-green-400`}
               style={{
                 textShadow: '0 0 20px rgba(34,197,94,0.4)'
               }}
             >
               모든 시스템 정상
             </h2>
-            <p className="mt-2 text-lg text-green-500/70">
+            <p className={`mt-2 ${compact ? 'text-xs' : 'text-lg'} text-green-500/70`}>
               All Systems Operational
             </p>
 
             {/* System count */}
-            <div className="mt-6 flex items-center gap-2 rounded-full bg-green-500/10 px-6 py-3">
-              <Activity className="h-5 w-5 text-green-500" />
-              <span className="text-lg font-medium text-green-400">
+            <div className={`${compact ? 'mt-2 px-3 py-1.5' : 'mt-6 px-6 py-3'} flex items-center gap-2 rounded-full bg-green-500/10`}>
+              <Activity className={`${compact ? 'h-3 w-3' : 'h-5 w-5'} text-green-500`} />
+              <span className={`${compact ? 'text-xs' : 'text-lg'} font-medium text-green-400`}>
                 {equipmentSystems.filter(s => s.isEnabled !== false).length}개 시설 정상 운영 중
               </span>
             </div>
 
             {/* Current time */}
-            <div className="mt-5 text-center">
-              <p className="font-mono text-3xl font-light tabular-nums text-muted-foreground">
+            <div className={`${compact ? 'mt-2' : 'mt-5'} text-center`}>
+              <p className={`font-mono ${compact ? 'text-lg' : 'text-3xl'} font-light tabular-nums text-muted-foreground`}>
                 {currentTime.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })}
               </p>
-              <p className="mt-1 text-sm text-muted-foreground/60">
+              <p className={`mt-1 ${compact ? 'text-xs' : 'text-sm'} text-muted-foreground/60`}>
                 {currentTime.toLocaleDateString('ko-KR', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' })}
               </p>
             </div>

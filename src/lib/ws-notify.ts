@@ -111,6 +111,20 @@ export function notifyAlarmResolution(
 }
 
 /**
+ * Notify all clients that audio settings changed (mute/unmute sync across browsers)
+ */
+export function notifyAudioSettingsChanged(audioEnabled: string, muteEndTime: string): void {
+  sendNotification({
+    type: 'settings',
+    data: {
+      audioEnabled,
+      muteEndTime,
+    },
+    timestamp: new Date().toISOString(),
+  })
+}
+
+/**
  * Notify worker to re-sync siren state (e.g., after mute toggle or alarm acknowledge)
  */
 export function notifySirenSync(): void {
