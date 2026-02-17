@@ -49,10 +49,10 @@ export function RealtimeDashboard() {
   const hasProblems = hasEquipmentProblems
 
   // Compact sizing
-  const radarSize = compact ? 180 : 400
-  const orbitCount = compact ? 5 : 10
-  const orbitMaxRadius = compact ? 85 : 195
-  const orbitMinRadius = compact ? 25 : 50
+  const radarSize = compact ? 260 : 400
+  const orbitCount = compact ? 7 : 10
+  const orbitMaxRadius = compact ? 125 : 195
+  const orbitMinRadius = compact ? 35 : 50
   const scannerSize = compact ? 160 : 350
   const ringSize = compact ? 80 : 180
   const ringCount = compact ? 3 : 7
@@ -449,7 +449,7 @@ export function RealtimeDashboard() {
                 const startAngle = (index * 137.508) % 360
                 const delay = (startAngle / 360) * duration
                 const size = compact
-                  ? (4 + (index % 3) * 2)   // 4, 6, 8 in compact
+                  ? (5 + (index % 3) * 2)   // 5, 7, 9 in compact
                   : (6 + (index % 5) * 3)   // 6, 9, 12, 15, 18
 
                 return (
@@ -478,17 +478,17 @@ export function RealtimeDashboard() {
 
               {/* Custom radar icon */}
               <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2">
-                <div className={`relative ${compact ? 'h-12 w-12' : 'h-24 w-24'}`}>
+                <div className={`relative ${compact ? 'h-16 w-16' : 'h-24 w-24'}`}>
                   {/* Radar circles */}
                   <div className="absolute inset-0 rounded-full border-[3px] border-green-400/50" style={{ boxShadow: '0 0 10px rgba(74,222,128,0.3), inset 0 0 10px rgba(74,222,128,0.1)' }} />
-                  <div className={`absolute ${compact ? 'inset-1.5' : 'inset-3'} rounded-full border-[3px] border-green-400/60`} style={{ boxShadow: '0 0 8px rgba(74,222,128,0.4), inset 0 0 8px rgba(74,222,128,0.15)' }} />
-                  <div className={`absolute ${compact ? 'inset-3' : 'inset-6'} rounded-full border-[3px] border-green-400/70`} style={{ boxShadow: '0 0 6px rgba(74,222,128,0.5), inset 0 0 6px rgba(74,222,128,0.2)' }} />
+                  <div className={`absolute ${compact ? 'inset-2' : 'inset-3'} rounded-full border-[3px] border-green-400/60`} style={{ boxShadow: '0 0 8px rgba(74,222,128,0.4), inset 0 0 8px rgba(74,222,128,0.15)' }} />
+                  <div className={`absolute ${compact ? 'inset-4' : 'inset-6'} rounded-full border-[3px] border-green-400/70`} style={{ boxShadow: '0 0 6px rgba(74,222,128,0.5), inset 0 0 6px rgba(74,222,128,0.2)' }} />
                   {/* Radar cross lines */}
                   <div className="absolute left-1/2 top-0 bottom-0 w-[3px] -translate-x-1/2 bg-green-400/40" style={{ boxShadow: '0 0 6px rgba(74,222,128,0.5)' }} />
                   <div className="absolute top-1/2 left-0 right-0 h-[3px] -translate-y-1/2 bg-green-400/40" style={{ boxShadow: '0 0 6px rgba(74,222,128,0.5)' }} />
                   {/* Center dot with check */}
-                  <div className={`absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 ${compact ? 'h-5 w-5' : 'h-10 w-10'} rounded-full bg-green-400 flex items-center justify-center`} style={{ boxShadow: '0 0 20px rgba(134,239,172,1), 0 0 40px rgba(74,222,128,0.8), 0 0 60px rgba(34,197,94,0.4)' }}>
-                    <Check className={`${compact ? 'h-3 w-3' : 'h-6 w-6'} text-white`} strokeWidth={3} />
+                  <div className={`absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 ${compact ? 'h-7 w-7' : 'h-10 w-10'} rounded-full bg-green-400 flex items-center justify-center`} style={{ boxShadow: '0 0 20px rgba(134,239,172,1), 0 0 40px rgba(74,222,128,0.8), 0 0 60px rgba(34,197,94,0.4)' }}>
+                    <Check className={`${compact ? 'h-4 w-4' : 'h-6 w-6'} text-white`} strokeWidth={3} />
                   </div>
                 </div>
               </div>
@@ -496,34 +496,40 @@ export function RealtimeDashboard() {
 
             {/* Main text */}
             <h2
-              className={`mt-4 ${compact ? 'text-xl' : 'text-4xl'} font-bold text-green-400`}
+              className="mt-4 text-4xl font-bold text-green-400"
               style={{
                 textShadow: '0 0 20px rgba(34,197,94,0.4)'
               }}
             >
               모든 시스템 정상
             </h2>
-            <p className={`mt-2 ${compact ? 'text-xs' : 'text-lg'} text-green-500/70`}>
-              All Systems Operational
-            </p>
+            {!compact && (
+              <p className="mt-2 text-lg text-green-500/70">
+                All Systems Operational
+              </p>
+            )}
 
             {/* System count */}
-            <div className={`${compact ? 'mt-2 px-3 py-1.5' : 'mt-6 px-6 py-3'} flex items-center gap-2 rounded-full bg-green-500/10`}>
-              <Activity className={`${compact ? 'h-3 w-3' : 'h-5 w-5'} text-green-500`} />
-              <span className={`${compact ? 'text-xs' : 'text-lg'} font-medium text-green-400`}>
-                {equipmentSystems.filter(s => s.isEnabled !== false).length}개 시설 정상 운영 중
-              </span>
-            </div>
+            {!compact && (
+              <div className="mt-6 px-6 py-3 flex items-center gap-2 rounded-full bg-green-500/10">
+                <Activity className="h-5 w-5 text-green-500" />
+                <span className="text-lg font-medium text-green-400">
+                  {equipmentSystems.filter(s => s.isEnabled !== false).length}개 시설 정상 운영 중
+                </span>
+              </div>
+            )}
 
             {/* Current time */}
-            <div className={`${compact ? 'mt-2' : 'mt-5'} text-center`}>
-              <p className={`font-mono ${compact ? 'text-lg' : 'text-3xl'} font-light tabular-nums text-muted-foreground`}>
-                {currentTime.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })}
-              </p>
-              <p className={`mt-1 ${compact ? 'text-xs' : 'text-sm'} text-muted-foreground/60`}>
-                {currentTime.toLocaleDateString('ko-KR', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' })}
-              </p>
-            </div>
+            {!compact && (
+              <div className="mt-5 text-center">
+                <p className="font-mono text-3xl font-light tabular-nums text-muted-foreground">
+                  {currentTime.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })}
+                </p>
+                <p className="mt-1 text-sm text-muted-foreground/60">
+                  {currentTime.toLocaleDateString('ko-KR', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' })}
+                </p>
+              </div>
+            )}
           </div>
         )}
       </div>

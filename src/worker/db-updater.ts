@@ -95,8 +95,8 @@ function addToSpikeBuffer(metricId: string, value: number): void {
 
 // Offline detection interval (check every 10 seconds)
 const OFFLINE_CHECK_INTERVAL = 10000
-// Systems are marked offline after 60 seconds of no data
-const OFFLINE_THRESHOLD = 60000
+// Systems are marked offline after 5 minutes of no data
+const OFFLINE_THRESHOLD = 300000
 
 let offlineCheckInterval: ReturnType<typeof setInterval> | null = null
 let historyCleanupInterval: ReturnType<typeof setInterval> | null = null
@@ -1085,7 +1085,7 @@ export async function syncOfflineAlarms(): Promise<void> {
 export function startOfflineDetection(): void {
   if (offlineCheckInterval) return
 
-  console.log('[db-updater] Starting offline detection (60s threshold)')
+  console.log('[db-updater] Starting offline detection (5min threshold)')
 
   offlineCheckInterval = setInterval(async () => {
     try {

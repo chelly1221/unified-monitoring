@@ -60,7 +60,7 @@ UDP/TCP Data → Worker Process (src/worker/)
 **Worker startup sequence** (`src/worker/index.ts`):
 1. Start UDP/TCP listeners
 2. Start WebSocket server (port 7778)
-3. Start offline detection (10s interval, 30s timeout)
+3. Start offline detection (10s interval, 5min timeout)
 4. Start history cleanup (25h retention, hourly)
 5. Sync siren state (activate if unresolved critical alarms exist)
 6. Sync offline alarms (create alarms for already-offline systems)
