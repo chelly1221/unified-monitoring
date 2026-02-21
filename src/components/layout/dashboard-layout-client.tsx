@@ -5,6 +5,7 @@ import { RealtimeProvider } from '@/components/realtime/realtime-provider'
 import { AudioAlertManager } from '@/components/realtime/audio-alert-manager'
 import { HeaderWithStatus } from './header-with-status'
 import { Sidebar } from './sidebar'
+import { FullscreenPrompt } from './fullscreen-prompt'
 import type { PrismaSystem, PrismaAlarm } from '@/types'
 
 interface DashboardLayoutClientProps {
@@ -23,6 +24,7 @@ export function DashboardLayoutClient({
   return (
     <RealtimeProvider initialSystems={initialSystems} initialAlarms={initialAlarms}>
       {pathname === '/' && <AudioAlertManager />}
+      <FullscreenPrompt />
       <div className="flex h-screen flex-col">
         <HeaderWithStatus />
         <div className="flex flex-1 overflow-hidden">
