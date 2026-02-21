@@ -47,9 +47,14 @@ const PRESETS = [
   { label: '30일', hours: 24 * 30 },
 ] as const
 
-function toLocalDatetime(d: Date): string {
+function toLocalDate(d: Date): string {
   const pad = (n: number) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+}
+
+function toLocalTime(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
 export function TemperatureHistory() {
@@ -70,8 +75,11 @@ export function TemperatureHistory() {
 
   // Custom range
   const now = new Date()
-  const [customFrom, setCustomFrom] = useState(toLocalDatetime(new Date(now.getTime() - 24 * 60 * 60 * 1000)))
-  const [customTo, setCustomTo] = useState(toLocalDatetime(now))
+  const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000)
+  const [dateFrom, setDateFrom] = useState(toLocalDate(yesterday))
+  const [timeFrom, setTimeFrom] = useState(toLocalTime(yesterday))
+  const [dateTo, setDateTo] = useState(toLocalDate(now))
+  const [timeTo, setTimeTo] = useState(toLocalTime(now))
 
   const fetchData = useCallback(async (from: string, to: string) => {
     setLoading(true)
@@ -124,7 +132,7 @@ export function TemperatureHistory() {
 
   const handleCustomQuery = () => {
     setActivePreset(-1)
-    fetchData(new Date(customFrom).toISOString(), new Date(customTo).toISOString())
+    fetchData(new Date(`${dateFrom}T${timeFrom}`).toISOString(), new Date(`${dateTo}T${timeTo}`).toISOString())
   }
 
   // Determine X-axis formatter based on span
@@ -199,17 +207,31 @@ export function TemperatureHistory() {
         {/* Custom range */}
         <div className="flex items-center gap-2">
           <input
-            type="datetime-local"
-            value={customFrom}
-            onChange={(e) => setCustomFrom(e.target.value)}
-            className="h-7 rounded border border-border bg-background px-2 text-xs text-foreground"
+            type="date"
+            value={dateFrom}
+            onChange={(e) => setDateFrom(e.target.value)}
+            className="h-7 rounded border border-border bg-background px-2 text-xs text-foreground [color-scheme:dark]"
+          />
+          <input
+            type="text"
+            placeholder="00:00"
+            value={timeFrom}
+            onChange={(e) => setTimeFrom(e.target.value)}
+            className="h-7 w-[4.5rem] rounded border border-border bg-background px-2 text-xs text-foreground"
           />
           <span className="text-xs text-muted-foreground">~</span>
           <input
-            type="datetime-local"
-            value={customTo}
-            onChange={(e) => setCustomTo(e.target.value)}
-            className="h-7 rounded border border-border bg-background px-2 text-xs text-foreground"
+            type="date"
+            value={dateTo}
+            onChange={(e) => setDateTo(e.target.value)}
+            className="h-7 rounded border border-border bg-background px-2 text-xs text-foreground [color-scheme:dark]"
+          />
+          <input
+            type="text"
+            placeholder="23:59"
+            value={timeTo}
+            onChange={(e) => setTimeTo(e.target.value)}
+            className="h-7 w-[4.5rem] rounded border border-border bg-background px-2 text-xs text-foreground"
           />
           <Button size="sm" variant="outline" className="h-7 px-3 text-xs" onClick={handleCustomQuery}>
             조회
