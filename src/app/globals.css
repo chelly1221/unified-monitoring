@@ -54,6 +54,7 @@
 }
 
 :root {
+  font-size: 24px;
   --radius: 0.625rem;
   --background: #0a0a0a;
   --foreground: #fafafa;
