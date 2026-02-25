@@ -9,7 +9,7 @@ export type SystemStatus = 'normal' | 'warning' | 'critical' | 'offline'
 
 export type SystemType = 'equipment' | 'ups' | 'sensor'
 
-export type AlarmSeverity = 'warning' | 'critical'
+export type AlarmSeverity = 'warning' | 'critical' | 'offline'
 
 export type TrendDirection = 'up' | 'down' | 'stable'
 

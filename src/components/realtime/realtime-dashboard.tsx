@@ -48,6 +48,13 @@ export function RealtimeDashboard() {
   // 3-way: equipment > sensor > normal
   const hasProblems = hasEquipmentProblems
 
+  // Distinguish offline-only from critical/warning problems
+  const activeProblemSystems = problemSystems.filter(s => s.status === 'critical' || s.status === 'warning')
+  const offlineProblemSystems = problemSystems.filter(s => s.status === 'offline')
+  const criticalWarningUnackedAlarms = equipmentUnackedAlarms.filter(a => a.severity === 'critical' || a.severity === 'warning')
+  const hasCriticalProblems = activeProblemSystems.length > 0 || criticalWarningUnackedAlarms.length > 0
+  const isOfflineOnly = !hasCriticalProblems && hasProblems
+
   // Compact sizing
   const radarSize = compact ? 260 : 400
   const orbitCount = compact ? 7 : 10
@@ -89,10 +96,10 @@ export function RealtimeDashboard() {
       <div className="flex flex-1 items-center justify-center rounded-lg border border-border bg-card">
         {hasProblems ? (
           <div className="flex h-full w-full flex-col">
-            {/* Alert header - red blinking */}
-            <div className={`animate-slow-pulse flex items-center justify-center gap-3 rounded-t-lg bg-red-600 ${compact ? 'py-1.5' : 'py-4'}`}>
+            {/* Alert header - red for critical/warning, yellow for offline-only */}
+            <div className={`animate-slow-pulse flex items-center justify-center gap-3 rounded-t-lg ${isOfflineOnly ? 'bg-yellow-600' : 'bg-red-600'} ${compact ? 'py-1.5' : 'py-4'}`}>
               <AlertTriangle className={`${compact ? 'h-6 w-6' : 'h-8 w-8'} text-white`} />
-              <span className={`${compact ? 'text-xl' : 'text-3xl'} font-bold text-white`}>장애발생</span>
+              <span className={`${compact ? 'text-xl' : 'text-3xl'} font-bold text-white`}>{isOfflineOnly ? '오프라인' : '장애발생'}</span>
               <AlertTriangle className={`${compact ? 'h-6 w-6' : 'h-8 w-8'} text-white`} />
             </div>
 
@@ -130,6 +137,20 @@ export function RealtimeDashboard() {
                   </div>
                 ))}
 
+              {/* Offline systems */}
+              {offlineProblemSystems.map((system) => (
+                <div
+                  key={system.id}
+                  className={`rounded-lg border-2 border-zinc-500 bg-zinc-700/80 ${compact ? 'p-3' : 'p-4'}`}
+                >
+                  <div className="flex justify-center">
+                    <span className={`${compact ? 'text-6xl' : 'text-7xl'} font-bold text-zinc-300`}>
+                      {system.name}
+                    </span>
+                  </div>
+                </div>
+              ))}
+
               {/* Unacked alarms not tied to a problem system (equipment only) */}
               {equipmentUnackedAlarms
                 .filter(
@@ -142,13 +163,15 @@ export function RealtimeDashboard() {
                     className={`rounded-lg border-2 ${compact ? 'p-3' : 'p-4'} ${
                       alarm.severity === 'critical'
                         ? 'border-red-500 bg-red-600/80'
-                        : 'border-yellow-300 bg-yellow-300'
+                        : alarm.severity === 'offline'
+                          ? 'border-zinc-500 bg-zinc-700/80'
+                          : 'border-yellow-300 bg-yellow-300'
                     }`}
                   >
                     <div className="flex justify-center">
                       <span
                         className={`${compact ? 'text-6xl' : 'text-7xl'} font-bold ${
-                          alarm.severity === 'critical'
+                          alarm.severity === 'critical' || alarm.severity === 'offline'
                             ? 'text-white'
                             : 'text-black'
                         }`}

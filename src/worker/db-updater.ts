@@ -979,8 +979,7 @@ export async function syncOfflineAlarms(): Promise<void> {
     })
 
     for (const sys of offlineSystems) {
-      // UPS type: always use 'critical' severity
-      const severity = sys.type === 'ups' ? 'critical' as const : 'warning' as const
+      const severity = 'offline' as const
       const alarm = await prisma.alarm.create({
         data: {
           systemId: sys.id,
@@ -1112,8 +1111,7 @@ export function startOfflineDetection(): void {
             data: { status: 'offline' },
           })
 
-          // UPS type: always use 'critical' severity
-          const severity = system.type === 'ups' ? 'critical' as const : 'warning' as const
+          const severity = 'offline' as const
 
           // Create offline alarm
           const alarm = await prisma.alarm.create({

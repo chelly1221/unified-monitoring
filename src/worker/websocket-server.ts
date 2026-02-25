@@ -173,7 +173,7 @@ export function broadcastAlarm(
   systemId: string,
   systemName: string,
   alarmId: string,
-  severity: 'warning' | 'critical',
+  severity: 'warning' | 'critical' | 'offline',
   message: string,
   value?: string | null
 ): void {
