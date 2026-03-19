@@ -681,6 +681,48 @@
   }
 }
 
+/* ===== uPlot dark theme overrides ===== */
+.uplot,
+.uplot *,
+.uplot *::before,
+.uplot *::after {
+  box-sizing: border-box;
+}
+
+.uplot {
+  font-family: sans-serif;
+  width: 100% !important;
+}
+
+.uplot .u-legend {
+  text-align: left;
+  padding: 4px 0 0 0;
+}
+
+.uplot .u-legend td {
+  color: #a1a1aa;
+  font-size: 12px;
+  padding: 1px 4px;
+}
+
+.uplot .u-legend .u-marker {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.uplot .u-cursor-x {
+  border-right: 1px dashed #a1a1aa40;
+}
+
+.uplot .u-cursor-y {
+  display: none;
+}
+
+.uplot .u-select {
+  display: none;
+}
+
 /* ===== Compact Screen (RPi 7-inch 800x480) ===== */
 @media (max-height: 520px) {
   /* Override keyframes: replace 100vh with 480px */
